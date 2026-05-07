@@ -289,6 +289,92 @@
     #toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
 
     #file-input { display: none; }
+
+    /* ── Animation bar ────────────────────────────────────────────── */
+    #anim-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      height: 36px;
+      padding: 0 10px;
+      background: var(--toolbar-bg);
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    #anim-bar[hidden] { display: none; }
+    .anim-btn {
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      justify-content: center;
+      font-size: 13px;
+    }
+    #anim-time {
+      font-family: monospace;
+      font-size: 11px;
+      color: var(--text-muted);
+      white-space: nowrap;
+      min-width: 120px;
+      text-align: right;
+    }
+    #anim-track {
+      flex: 1;
+      height: 20px;
+      position: relative;
+      cursor: pointer;
+    }
+    #anim-track::before {
+      content: '';
+      position: absolute;
+      left: 0; right: 0;
+      height: 6px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: var(--btn-bg);
+      border-radius: 3px;
+    }
+    #anim-fill {
+      position: absolute;
+      left: 0;
+      height: 6px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: var(--overlay);
+      border-radius: 3px;
+      pointer-events: none;
+      width: 0%;
+    }
+    #anim-thumb {
+      position: absolute;
+      width: 12px;
+      height: 12px;
+      background: var(--overlay);
+      border-radius: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      transition: transform .1s;
+      left: 0%;
+    }
+    #anim-track:hover #anim-thumb { transform: translate(-50%, -50%) scale(1.3); }
+    #anim-loop {
+      font-family: monospace;
+      font-size: 15px;
+      color: var(--overlay);
+      line-height: 1;
+      flex-shrink: 0;
+    }
+    #anim-speed {
+      background: var(--btn-bg);
+      color: var(--text);
+      border: 1px solid transparent;
+      border-radius: 5px;
+      padding: 4px 6px;
+      font-size: 12px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    #anim-speed:hover { background: var(--btn-hover); }
   </style>
 </head>
 <body>
@@ -330,6 +416,18 @@
         <div id="stage"></div>
         <div id="no-vb-note" hidden>no viewBox set</div>
         <div id="zoom-badge">100%</div>
+      </div>
+      <div id="anim-bar" hidden>
+        <button class="btn anim-btn" id="anim-play"    title="Play / Pause (Space)">▶</button>
+        <button class="btn anim-btn" id="anim-restart" title="Restart">↻</button>
+        <span id="anim-time">0.00s / 0.00s</span>
+        <div id="anim-track"><div id="anim-fill"></div><div id="anim-thumb"></div></div>
+        <span id="anim-loop" title="Loops indefinitely" hidden>∞</span>
+        <select id="anim-speed" title="Playback speed">
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="2">2×</option>
+        </select>
       </div>
       <div id="error-banner" hidden></div>
     </div>
@@ -547,6 +645,7 @@ function renderPreview() {
   // 3. Inject into stage
   $stage.innerHTML = clean;
   updateViewboxOverlay();
+  initAnimController();
   if (pendingFit) { pendingFit = false; fitToWindow(); }
 }
 
@@ -888,6 +987,11 @@ function showToast(msg) {
 
 // ── KEYBOARD SHORTCUTS ───────────────────────────────────────────────────
 document.addEventListener('keydown', e => {
+  if (e.key === ' ' && animState.hasAnim && !e.target.closest('.cm-editor')) {
+    e.preventDefault();
+    setAnimPlaying(!animState.playing);
+    return;
+  }
   const mod = e.ctrlKey || e.metaKey;
   if (!mod) return;
   if (e.key === 's' && !e.shiftKey) { e.preventDefault(); saveFile(); }
@@ -904,6 +1008,303 @@ document.addEventListener('keydown', e => {
     const cx = $viewport.clientWidth/2, cy = $viewport.clientHeight/2;
     zoomAt(1 / (1 + CONFIG.zoomStep), cx, cy);
   }
+});
+
+// ── ANIMATION TIMELINE ──────────────────────────────────────────────────────
+const $animBar     = document.getElementById('anim-bar');
+const $animPlay    = document.getElementById('anim-play');
+const $animRestart = document.getElementById('anim-restart');
+const $animTime    = document.getElementById('anim-time');
+const $animTrack   = document.getElementById('anim-track');
+const $animFill    = document.getElementById('anim-fill');
+const $animThumb   = document.getElementById('anim-thumb');
+const $animLoop    = document.getElementById('anim-loop');
+const $animSpeed   = document.getElementById('anim-speed');
+
+const animState = {
+  hasAnim:   false,
+  duration:  0,
+  looping:   false,
+  playing:   true,
+  rate:      1,
+  virtualTime: 0,
+  lastRaf:   0,
+  rafId:     0,
+  scrubbing: false,
+  wasPlayingBeforeScrub: true,
+};
+
+function computeAnimDuration(svg) {
+  const allElems = [...svg.querySelectorAll('animate, animateTransform, animateMotion, animateColor, set')];
+  if (!allElems.length) return { count: 0, duration: 0, looping: false };
+
+  // Build ID → element map for dependency resolution
+  const idMap = {};
+  for (const el of allElems) {
+    const id = el.getAttribute('id');
+    if (id) idMap[id] = el;
+  }
+
+  // Detect looping before recursion
+  let looping = false;
+  for (const el of allElems) {
+    const b  = el.getAttribute('begin') || '';
+    if (b.split(';').filter(s => s.trim()).length > 1) looping = true;
+    const rc = el.getAttribute('repeatCount');
+    const rd = el.getAttribute('repeatDur');
+    const d  = el.getAttribute('dur');
+    if (rc === 'indefinite' || rd === 'indefinite' || d === 'indefinite') looping = true;
+  }
+
+  const beginCache   = new Map();
+  const endCache     = new Map();
+  const inBeginStack = new Set();
+  const inEndStack   = new Set();
+  // cycleHit tracks whether a cycle was encountered during the current computation.
+  // Results computed while a cycle was active are NOT cached — only clean results are cached.
+  // This handles diamond-shaped dependency graphs where the same node is reachable via two
+  // different paths: the "inherited visiting set" approach incorrectly blocks one path.
+  let cycleHit = false;
+
+  function parseClockVal(str) {
+    if (!str) return null;
+    const m = str.trim().match(/^([\d.]+)\s*(h|min|ms|s)?$/i);
+    if (!m) return null;
+    const n = parseFloat(m[1]);
+    switch ((m[2] || 's').toLowerCase()) {
+      case 'h':   return n * 3600;
+      case 'min': return n * 60;
+      case 'ms':  return n / 1000;
+      default:    return n;
+    }
+  }
+
+  function resolveRef(ref) {
+    const clk = parseClockVal(ref);
+    if (clk !== null) return clk;
+    if (ref === 'indefinite') return null;
+
+    const m = ref.match(/^([\w-]+)\.(begin|end)(?:([+-])([\d.]+\s*(?:h|min|ms|s)?))?$/i);
+    if (!m) return null;
+
+    const [, refId, event, sign, offsetStr] = m;
+    const offset = offsetStr ? (parseClockVal(offsetStr) ?? 0) : 0;
+    const refEl  = idMap[refId];
+    if (!refEl) return null;
+
+    const base = event === 'begin' ? getBeginTime(refEl) : getEndTime(refEl);
+    if (base === null) return null;
+    return base + (sign === '-' ? -offset : offset);
+  }
+
+  function getBeginTime(el) {
+    if (beginCache.has(el)) return beginCache.get(el);
+    if (inBeginStack.has(el)) { cycleHit = true; return null; }
+    inBeginStack.add(el);
+
+    const prev = cycleHit; cycleHit = false;
+    const parts = (el.getAttribute('begin') || '0').split(';').map(s => s.trim()).filter(Boolean);
+    const times = parts.map(resolveRef).filter(v => v !== null);
+    const result = times.length > 0 ? Math.min(...times) : 0;
+    const had = cycleHit; cycleHit = prev || had;
+
+    inBeginStack.delete(el);
+    if (!had) beginCache.set(el, result);
+    return result;
+  }
+
+  function getEndTime(el) {
+    if (endCache.has(el)) return endCache.get(el);
+    if (inEndStack.has(el)) { cycleHit = true; return null; }
+    inEndStack.add(el);
+
+    const prev = cycleHit; cycleHit = false;
+    const beginTime    = getBeginTime(el);
+    const endStr       = el.getAttribute('end');
+    const durStr       = el.getAttribute('dur');
+    const repeatCount  = el.getAttribute('repeatCount') || '1';
+    const repeatDurStr = el.getAttribute('repeatDur');
+
+    let result = null;
+    if (repeatCount !== 'indefinite' && repeatDurStr !== 'indefinite' && durStr !== 'indefinite') {
+      if (endStr && endStr !== 'indefinite') {
+        const parts = endStr.split(';').map(s => s.trim()).filter(Boolean);
+        const times = parts.map(resolveRef).filter(v => v !== null);
+        if (times.length > 0) result = Math.min(...times);
+      }
+      if (result === null && durStr) {
+        const dur = parseClockVal(durStr);
+        if (dur !== null) {
+          const count     = Math.max(1, parseFloat(repeatCount) || 1);
+          const repeatDur = parseClockVal(repeatDurStr);
+          let activeDur   = dur * count;
+          if (repeatDur !== null) activeDur = Math.min(activeDur, repeatDur);
+          result = beginTime + activeDur;
+        }
+      }
+    }
+
+    const had = cycleHit; cycleHit = prev || had;
+    inEndStack.delete(el);
+    if (!had) endCache.set(el, result);
+    return result;
+  }
+
+  let maxEnd    = 0;
+  let hasFinite = false;
+
+  for (const el of allElems) {
+    const end = getEndTime(el);
+    if (end !== null && end > maxEnd) { maxEnd = end; hasFinite = true; }
+  }
+
+  // For looping animations driven by a sync trigger (begin="0s;X"), the cycle period
+  // is the second trigger time (e.g. "0s;c4a3.end+2s" → period = c4a3.end+2s).
+  // This accounts for intentional pauses between repetitions that aren't captured
+  // by any element's end time.
+  for (const el of allElems) {
+    const b = el.getAttribute('begin') || '';
+    const parts = b.split(';').map(s => s.trim()).filter(Boolean);
+    if (parts.length < 2) continue;
+    cycleHit = false;
+    const times = parts.map(resolveRef).filter(v => v !== null).sort((a, b) => a - b);
+    if (times.length >= 2 && times[1] > maxEnd) { maxEnd = times[1]; hasFinite = true; }
+  }
+
+  if (!hasFinite) return { count: allElems.length, duration: 0, looping };
+  return { count: allElems.length, duration: maxEnd, looping };
+}
+
+function formatTime(s) {
+  if (s < 60) return s.toFixed(2) + 's';
+  const m = Math.floor(s / 60);
+  return `${m}:${(s - m * 60).toFixed(2).padStart(5, '0')}`;
+}
+
+function updateAnimUI() {
+  const { duration, virtualTime, looping } = animState;
+  const displayT = looping ? virtualTime % duration : Math.min(virtualTime, duration);
+  const frac = duration > 0 ? Math.min(displayT / duration, 1) : 0;
+  $animFill.style.width = (frac * 100) + '%';
+  $animThumb.style.left  = (frac * 100) + '%';
+  $animTime.textContent = formatTime(displayT) + ' / ' + formatTime(duration);
+}
+
+function getAnimSvg() { return $stage.querySelector('svg'); }
+
+function tickAnim(now) {
+  if (!animState.hasAnim) return;
+  animState.rafId = requestAnimationFrame(tickAnim);
+
+  const dt = animState.lastRaf > 0 ? (now - animState.lastRaf) / 1000 : 0;
+  animState.lastRaf = now;
+
+  if (animState.playing && !animState.scrubbing) {
+    animState.virtualTime += dt * animState.rate;
+    if (!animState.looping && animState.virtualTime >= animState.duration) {
+      animState.virtualTime = animState.duration;
+      setAnimPlaying(false);
+    }
+  }
+
+  const svg = getAnimSvg();
+  if (svg) {
+    // For looping, pass virtualTime directly — SVG handles modulo internally.
+    // For non-looping, clamp at duration.
+    const t = animState.looping
+      ? animState.virtualTime
+      : Math.min(animState.virtualTime, animState.duration);
+    try { svg.setCurrentTime(t); } catch (_) {}
+  }
+
+  updateAnimUI();
+}
+
+function setAnimPlaying(on) {
+  if (on && !animState.looping && animState.virtualTime >= animState.duration) {
+    restartAnim();
+    return;
+  }
+  animState.playing = on;
+  $animPlay.textContent = on ? '⏸' : '▶';
+}
+
+function restartAnim() {
+  animState.virtualTime = 0;
+  animState.lastRaf     = 0;
+  setAnimPlaying(true);
+  const svg = getAnimSvg();
+  if (svg) { try { svg.setCurrentTime(0); } catch (_) {} }
+}
+
+function seekAnim(frac) {
+  animState.virtualTime = Math.max(0, Math.min(1, frac)) * animState.duration;
+  animState.lastRaf     = 0;
+  const svg = getAnimSvg();
+  if (svg) {
+    const t = animState.looping
+      ? animState.virtualTime
+      : Math.min(animState.virtualTime, animState.duration);
+    try { svg.setCurrentTime(t); } catch (_) {}
+  }
+  updateAnimUI();
+}
+
+function initAnimController() {
+  cancelAnimationFrame(animState.rafId);
+  animState.hasAnim = false;
+
+  const svg = getAnimSvg();
+  if (!svg) { $animBar.hidden = true; return; }
+
+  const { count, duration, looping } = computeAnimDuration(svg);
+  if (count === 0 || duration <= 0) { $animBar.hidden = true; return; }
+
+  animState.hasAnim     = true;
+  animState.duration    = duration;
+  animState.looping     = looping;
+  animState.virtualTime = 0;
+  animState.lastRaf     = 0;
+  animState.rate        = parseFloat($animSpeed.value);
+  setAnimPlaying(true);
+
+  $animLoop.hidden = !looping;
+  $animBar.hidden  = false;
+
+  try { svg.pauseAnimations(); } catch (_) {}
+
+  animState.rafId = requestAnimationFrame(tickAnim);
+}
+
+// Controls
+$animPlay.addEventListener('click',    () => setAnimPlaying(!animState.playing));
+$animRestart.addEventListener('click', restartAnim);
+$animSpeed.addEventListener('change',  () => { animState.rate = parseFloat($animSpeed.value); });
+
+// Scrub
+$animTrack.addEventListener('pointerdown', e => {
+  if (!animState.hasAnim) return;
+  animState.scrubbing = true;
+  animState.wasPlayingBeforeScrub = animState.playing;
+  setAnimPlaying(false);
+  $animTrack.setPointerCapture(e.pointerId);
+  const r = $animTrack.getBoundingClientRect();
+  seekAnim((e.clientX - r.left) / r.width);
+});
+$animTrack.addEventListener('pointermove', e => {
+  if (!animState.scrubbing) return;
+  const r = $animTrack.getBoundingClientRect();
+  seekAnim((e.clientX - r.left) / r.width);
+});
+$animTrack.addEventListener('pointerup', () => {
+  if (!animState.scrubbing) return;
+  animState.scrubbing = false;
+  animState.lastRaf   = 0;
+  if (animState.wasPlayingBeforeScrub) setAnimPlaying(true);
+});
+$animTrack.addEventListener('pointercancel', () => {
+  animState.scrubbing = false;
+  animState.lastRaf   = 0;
 });
 
 // ── INIT ─────────────────────────────────────────────────────────────────
