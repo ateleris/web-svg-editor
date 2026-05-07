@@ -1,0 +1,913 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SVG Editor</title>
+  <style>
+    /* ── Theme variables ──────────────────────────────────────────── */
+    [data-theme="dark"] {
+      --bg:           #1e1e2e;
+      --surface:      #181825;
+      --toolbar-bg:   #11111b;
+      --border:       #313244;
+      --text:         #cdd6f4;
+      --text-muted:   #6c7086;
+      --btn-bg:       #313244;
+      --btn-hover:    #45475a;
+      --btn-active:   #585b70;
+      --gutter-bg:    #2a2a3e;
+      --gutter-hover: #585b70;
+      --error-bg:     rgba(243,139,168,.15);
+      --error-text:   #f38ba8;
+      --checker-a:    #313244;
+      --checker-b:    #45475a;
+      --overlay:      #a6e3a1;
+      --overlay-text: #1e1e2e;
+      --toast-bg:     #a6e3a1;
+      --toast-text:   #1e1e2e;
+      --zoom-bg:      rgba(17,17,27,.75);
+    }
+    [data-theme="light"] {
+      --bg:           #eff1f5;
+      --surface:      #ffffff;
+      --toolbar-bg:   #dce0e8;
+      --border:       #ccd0da;
+      --text:         #4c4f69;
+      --text-muted:   #9ca0b0;
+      --btn-bg:       #ccd0da;
+      --btn-hover:    #bcc0cc;
+      --btn-active:   #acb0be;
+      --gutter-bg:    #c6cad4;
+      --gutter-hover: #acb0be;
+      --error-bg:     rgba(210,15,57,.1);
+      --error-text:   #d20f39;
+      --checker-a:    #dce0e8;
+      --checker-b:    #eff1f5;
+      --overlay:      #40a02b;
+      --overlay-text: #ffffff;
+      --toast-bg:     #40a02b;
+      --toast-text:   #ffffff;
+      --zoom-bg:      rgba(220,224,232,.85);
+    }
+
+    /* ── Reset ────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      overflow: hidden;
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: 13px;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    /* ── App shell ────────────────────────────────────────────────── */
+    #app { display: flex; flex-direction: column; height: 100%; }
+
+    /* ── Toolbar ──────────────────────────────────────────────────── */
+    #toolbar {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 0 10px;
+      height: 44px;
+      background: var(--toolbar-bg);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    #toolbar::-webkit-scrollbar { display: none; }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 5px 10px;
+      border: 1px solid transparent;
+      border-radius: 5px;
+      background: var(--btn-bg);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 12px;
+      white-space: nowrap;
+      flex-shrink: 0;
+      transition: background .1s;
+      user-select: none;
+    }
+    .btn:hover { background: var(--btn-hover); }
+    .btn:active { background: var(--btn-active); }
+    .btn.active { background: var(--btn-active); border-color: var(--overlay); }
+
+    .sep {
+      width: 1px; height: 22px;
+      background: var(--border);
+      flex-shrink: 0;
+      margin: 0 3px;
+    }
+
+    .indent-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 12px;
+      color: var(--text-muted);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .indent-label select {
+      background: var(--btn-bg);
+      color: var(--text);
+      border: 1px solid transparent;
+      border-radius: 5px;
+      padding: 4px 6px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .indent-label select:hover { background: var(--btn-hover); }
+
+    #filename-label {
+      color: var(--text-muted);
+      font-size: 11px;
+      font-style: italic;
+      max-width: 180px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex-shrink: 1;
+    }
+
+    /* ── Split ────────────────────────────────────────────────────── */
+    #split {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 6px 1fr;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    /* ── Editor pane ──────────────────────────────────────────────── */
+    #editor-pane {
+      overflow: hidden;
+      min-width: 160px;
+      background: var(--surface);
+    }
+    #editor { height: 100%; overflow: hidden; }
+
+    /* CodeMirror fill */
+    .cm-editor          { height: 100% !important; }
+    .cm-scroller        { overflow: auto !important; font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace !important; }
+
+    /* ── Gutter ───────────────────────────────────────────────────── */
+    #gutter {
+      background: var(--gutter-bg);
+      cursor: col-resize;
+      user-select: none;
+      position: relative;
+      transition: background .12s;
+    }
+    #gutter::after {
+      content: '⋮';
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      color: var(--text-muted);
+      font-size: 14px;
+      pointer-events: none;
+    }
+    #gutter:hover, #gutter.dragging { background: var(--gutter-hover); }
+
+    /* ── Preview pane ─────────────────────────────────────────────── */
+    #preview-pane {
+      overflow: hidden;
+      min-width: 160px;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+
+    #viewport {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+      cursor: grab;
+      /* Checkered transparency pattern */
+      background-image:
+        linear-gradient(45deg, var(--checker-a) 25%, transparent 25%),
+        linear-gradient(-45deg,var(--checker-a) 25%, transparent 25%),
+        linear-gradient(45deg,  transparent    75%, var(--checker-a) 75%),
+        linear-gradient(-45deg, transparent    75%, var(--checker-a) 75%);
+      background-size: 20px 20px;
+      background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+      background-color: var(--checker-b);
+    }
+    #viewport.panning { cursor: grabbing; }
+
+    #stage {
+      position: absolute;
+      top: 0; left: 0;
+      transform-origin: 0 0;
+    }
+    #stage svg { display: block; }
+
+    /* ViewBox overlay — lives inside #stage, moves with it */
+    .vb-overlay {
+      position: absolute;
+      top: 0; left: 0;
+      pointer-events: none;
+      border: 2px dashed var(--overlay);
+    }
+    .vb-label {
+      position: absolute;
+      top: 3px; left: 3px;
+      padding: 1px 6px;
+      font-family: monospace;
+      font-size: 11px;
+      background: var(--overlay);
+      color: var(--overlay-text);
+      border-radius: 3px;
+      white-space: nowrap;
+    }
+
+    #no-vb-note {
+      position: absolute;
+      bottom: 8px; right: 10px;
+      font-size: 11px;
+      color: var(--text-muted);
+      font-style: italic;
+      pointer-events: none;
+    }
+
+    /* ── Error banner (absolute over viewport) ────────────────────── */
+    #error-banner {
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      padding: 5px 12px;
+      background: var(--error-bg);
+      color: var(--error-text);
+      font-family: monospace;
+      font-size: 11px;
+      z-index: 20;
+      border-bottom: 1px solid var(--error-text);
+      line-height: 1.5;
+      backdrop-filter: blur(2px);
+    }
+
+    /* ── Zoom badge ───────────────────────────────────────────────── */
+    #zoom-badge {
+      position: absolute;
+      bottom: 8px; left: 10px;
+      padding: 2px 7px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-family: monospace;
+      background: var(--zoom-bg);
+      color: var(--text-muted);
+      pointer-events: none;
+      backdrop-filter: blur(4px);
+    }
+
+    /* ── Toast ────────────────────────────────────────────────────── */
+    #toast {
+      position: fixed;
+      bottom: 24px; left: 50%;
+      transform: translateX(-50%) translateY(50px);
+      padding: 8px 20px;
+      background: var(--toast-bg);
+      color: var(--toast-text);
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 600;
+      z-index: 999;
+      transition: transform .22s ease, opacity .22s ease;
+      opacity: 0;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+    #toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+
+    #file-input { display: none; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <div id="toolbar">
+    <button class="btn" id="btn-open">📂 Open</button>
+    <button class="btn" id="btn-save">💾 Save</button>
+    <button class="btn" id="btn-saveas">Save As…</button>
+    <span id="filename-label">untitled.svg</span>
+    <span class="sep"></span>
+    <button class="btn" id="btn-copy">Copy</button>
+    <button class="btn" id="btn-download">↓ Download</button>
+    <span class="sep"></span>
+    <button class="btn" id="btn-format">⌥ Format</button>
+    <span class="sep"></span>
+    <button class="btn" id="btn-zoom-in"    title="Zoom in (Ctrl ++)">＋</button>
+    <button class="btn" id="btn-zoom-out"   title="Zoom out (Ctrl –)">－</button>
+    <button class="btn" id="btn-fit"        title="Fit to window (Ctrl 0)">Fit</button>
+    <button class="btn" id="btn-one-to-one" title="Actual size (100%)">1:1</button>
+    <span class="sep"></span>
+    <button class="btn" id="btn-viewbox">ViewBox</button>
+    <span class="sep"></span>
+    <label class="indent-label">Indent
+      <select id="indent-select">
+        <option value="2">2</option>
+        <option value="4">4</option>
+        <option value="8">8</option>
+      </select>
+    </label>
+    <span class="sep"></span>
+    <button class="btn" id="btn-theme">☀ Light</button>
+  </div>
+
+  <div id="split">
+    <div id="editor-pane"><div id="editor"></div></div>
+    <div id="gutter"></div>
+    <div id="preview-pane">
+      <div id="viewport">
+        <div id="stage"></div>
+        <div id="no-vb-note" hidden>no viewBox set</div>
+        <div id="zoom-badge">100%</div>
+      </div>
+      <div id="error-banner" hidden></div>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+<input type="file" id="file-input" accept=".svg,image/svg+xml">
+
+<script type="importmap">
+{
+  "imports": {
+    "@codemirror/state":          "https://esm.sh/@codemirror/state@6",
+    "@codemirror/view":           "https://esm.sh/@codemirror/view@6?external=@codemirror/state",
+    "@codemirror/language":       "https://esm.sh/@codemirror/language@6?external=@codemirror/state,@codemirror/view",
+    "@codemirror/basic-setup":    "https://esm.sh/@codemirror/basic-setup?external=@codemirror/state,@codemirror/view,@codemirror/language",
+    "@codemirror/commands":       "https://esm.sh/@codemirror/commands@6?external=@codemirror/state,@codemirror/view,@codemirror/language",
+    "@codemirror/lang-xml":       "https://esm.sh/@codemirror/lang-xml@6?external=@codemirror/state,@codemirror/view,@codemirror/language",
+    "@codemirror/theme-one-dark": "https://esm.sh/@codemirror/theme-one-dark@6?external=@codemirror/state,@codemirror/view"
+  }
+}
+</script>
+<script type="module">
+// ── CONFIG ──────────────────────────────────────────────────────────────
+const CONFIG = {
+  debounceMs:   150,
+  minPaneWidth: 160,
+  zoomStep:     0.15,
+  minZoom:      0.02,
+  maxZoom:      64,
+  defaultIndent: 4,
+  defaultTheme: 'dark',
+  defaultSvg:
+`<svg xmlns="http://www.w3.org/2000/svg"
+     width="400" height="400"
+     viewBox="0 0 400 400">
+
+  <!-- Background -->
+  <rect width="400" height="400" fill="#1e1e2e"/>
+
+  <!-- Rings -->
+  <circle cx="200" cy="200" r="140" fill="none" stroke="#cba6f7" stroke-width="1.5" opacity=".35"/>
+  <circle cx="200" cy="200" r="100" fill="none" stroke="#89b4fa" stroke-width="1.5" opacity=".55"/>
+  <circle cx="200" cy="200" r="60"  fill="none" stroke="#a6e3a1" stroke-width="1.5" opacity=".75"/>
+
+  <!-- Triangle -->
+  <polygon points="200,80 310,260 90,260"
+           fill="#cba6f7" fill-opacity=".2"
+           stroke="#cba6f7" stroke-width="1.5">
+    <animateTransform attributeName="transform" type="rotate" from="0 200 200" to="360 200 200" dur="5s" repeatDur="indefinite"/>
+  </polygon>
+
+  <!-- Vertex dots -->
+  <circle cx="200" cy="80"  r="5" fill="#f38ba8"/>
+  <circle cx="310" cy="260" r="5" fill="#89b4fa"/>
+  <circle cx="90"  cy="260" r="5" fill="#a6e3a1"/>
+  <circle cx="200" cy="200" r="7" fill="#cba6f7"/>
+
+  <!-- Label -->
+  <text x="200" y="358"
+        font-family="system-ui, sans-serif" font-size="13"
+        fill="#6c7086" text-anchor="middle">SVG Editor</text>
+
+</svg>`,
+};
+
+// ── IMPORTS ─────────────────────────────────────────────────────────────
+import { basicSetup }               from '@codemirror/basic-setup';
+import { EditorView, keymap }        from '@codemirror/view';
+import { indentWithTab }            from '@codemirror/commands';
+import { indentUnit }              from '@codemirror/language';
+import { EditorState, Compartment } from '@codemirror/state';
+import { xml }                      from '@codemirror/lang-xml';
+import { oneDark }                  from '@codemirror/theme-one-dark';
+import DOMPurify                    from 'https://esm.sh/dompurify@3';
+import xmlFormat                    from 'https://esm.sh/xml-formatter@3';
+
+// ── DOM REFS ────────────────────────────────────────────────────────────
+const $split      = document.getElementById('split');
+const $gutter     = document.getElementById('gutter');
+const $stage      = document.getElementById('stage');
+const $viewport   = document.getElementById('viewport');
+const $errBanner  = document.getElementById('error-banner');
+const $noVbNote   = document.getElementById('no-vb-note');
+const $zoomBadge  = document.getElementById('zoom-badge');
+const $toast      = document.getElementById('toast');
+const $fileInput  = document.getElementById('file-input');
+const $filename   = document.getElementById('filename-label');
+const $btnTheme   = document.getElementById('btn-theme');
+const $btnViewbox = document.getElementById('btn-viewbox');
+
+// ── STATE ────────────────────────────────────────────────────────────────
+const themeComp  = new Compartment();
+const indentComp = new Compartment();
+let editorView;
+let fileHandle  = null;
+let fileName    = 'untitled.svg';
+let renderTimer = null;
+let pendingFit  = false;
+let indentSize  = 4;
+let isDark      = true;
+let viewboxOn   = false;
+// zoom / pan
+let scale = 1, tx = 0, ty = 0;
+let isPanning = false;
+let panStart  = { x: 0, y: 0, tx: 0, ty: 0 };
+
+// ── EDITOR ──────────────────────────────────────────────────────────────
+function buildExtensions(dark) {
+  return [
+    basicSetup,
+    keymap.of([indentWithTab]),
+    indentComp.of([indentUnit.of(' '.repeat(indentSize)), EditorState.tabSize.of(indentSize)]),
+    xml(),
+    themeComp.of(dark ? oneDark : []),
+    EditorView.updateListener.of(u => { if (u.docChanged) scheduleRender(); }),
+  ];
+}
+
+editorView = new EditorView({
+  state: EditorState.create({ doc: CONFIG.defaultSvg, extensions: buildExtensions(true) }),
+  parent: document.getElementById('editor'),
+});
+
+// ── SPLIT / DRAG ─────────────────────────────────────────────────────────
+(function initSplit() {
+  const saved = parseFloat(localStorage.getItem('svged-split') || '');
+  if (!isNaN(saved)) applySplitFrac(saved);
+
+  $gutter.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    $gutter.setPointerCapture(e.pointerId);
+    $gutter.classList.add('dragging');
+  });
+  $gutter.addEventListener('pointermove', e => {
+    if (!$gutter.hasPointerCapture(e.pointerId)) return;
+    const total = $split.clientWidth;
+    const raw   = e.clientX - $split.getBoundingClientRect().left;
+    const left  = Math.max(CONFIG.minPaneWidth, Math.min(raw, total - 6 - CONFIG.minPaneWidth));
+    $split.style.gridTemplateColumns = `${left}px 6px 1fr`;
+    localStorage.setItem('svged-split', left / total);
+  });
+  $gutter.addEventListener('pointerup',    () => $gutter.classList.remove('dragging'));
+  $gutter.addEventListener('pointercancel',() => $gutter.classList.remove('dragging'));
+
+  function applySplitFrac(f) {
+    const total = $split.clientWidth || window.innerWidth;
+    const left  = Math.max(CONFIG.minPaneWidth, Math.min(f * total, total - 6 - CONFIG.minPaneWidth));
+    $split.style.gridTemplateColumns = `${left}px 6px 1fr`;
+  }
+})();
+
+// ── THEME ────────────────────────────────────────────────────────────────
+function setTheme(dark) {
+  isDark = dark;
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+  editorView.dispatch({ effects: themeComp.reconfigure(dark ? oneDark : []) });
+  $btnTheme.textContent = dark ? '☀ Light' : '🌙 Dark';
+  localStorage.setItem('svged-theme', dark ? 'dark' : 'light');
+}
+
+// Restore or default
+{
+  const saved = localStorage.getItem('svged-theme');
+  setTheme(saved ? saved === 'dark' : CONFIG.defaultTheme === 'dark');
+}
+$btnTheme.addEventListener('click', () => setTheme(!isDark));
+
+// ── INDENT ───────────────────────────────────────────────────────────────
+const $indentSelect = document.getElementById('indent-select');
+{
+  const saved = parseInt(localStorage.getItem('svged-indent') || '');
+  indentSize = [2, 4, 8].includes(saved) ? saved : CONFIG.defaultIndent;
+  $indentSelect.value = String(indentSize);
+}
+$indentSelect.addEventListener('change', () => {
+  indentSize = parseInt($indentSelect.value);
+  editorView.dispatch({ effects: indentComp.reconfigure([
+    indentUnit.of(' '.repeat(indentSize)),
+    EditorState.tabSize.of(indentSize),
+  ])});
+  localStorage.setItem('svged-indent', String(indentSize));
+});
+
+// ── RENDER PIPELINE ──────────────────────────────────────────────────────
+function scheduleRender() {
+  clearTimeout(renderTimer);
+  renderTimer = setTimeout(renderPreview, CONFIG.debounceMs);
+}
+
+function renderPreview() {
+  const text = editorView.state.doc.toString();
+
+  // 1. Validate XML
+  const parsed = new DOMParser().parseFromString(text, 'image/svg+xml');
+  const parseErr = parsed.querySelector('parsererror');
+  if (parseErr) {
+    const msg = parseErr.textContent.trim().replace(/\s+/g, ' ').slice(0, 200);
+    showError(msg);
+    return; // keep last valid render visible
+  }
+  clearError();
+
+  // 2. Sanitize (strip scripts, event handlers, data: URIs in src)
+  const clean = DOMPurify.sanitize(text, {
+    USE_PROFILES:  { svg: true, svgFilters: true },
+    ADD_TAGS:      ['animate', 'animateMotion', 'animateColor', 'set', 'mpath'],
+    ADD_ATTR:      ['from', 'to', 'by', 'begin', 'end', 'values', 'calcMode',
+                    'keyTimes', 'keySplines', 'keyPoints', 'additive', 'accumulate',
+                    'repeatDur', 'restart', 'attributeType', 'path', 'rotate'],
+    FORBID_TAGS:   ['script'],
+    FORBID_ATTR:   ['onload', 'onerror', 'onmouseover'],
+  });
+
+  // 3. Inject into stage
+  $stage.innerHTML = clean;
+  updateViewboxOverlay();
+  if (pendingFit) { pendingFit = false; fitToWindow(); }
+}
+
+function showError(msg) {
+  $errBanner.textContent = '⚠ ' + msg;
+  $errBanner.hidden = false;
+}
+function clearError() {
+  $errBanner.hidden = true;
+}
+
+// ── ZOOM & PAN ───────────────────────────────────────────────────────────
+function applyTransform() {
+  $stage.style.transform = `translate(${tx}px,${ty}px) scale(${scale})`;
+  $zoomBadge.textContent = Math.round(scale * 100) + '%';
+  if (viewboxOn) updateViewboxOverlay();
+}
+
+function zoomAt(factor, cx, cy) {
+  const ns = Math.max(CONFIG.minZoom, Math.min(CONFIG.maxZoom, scale * factor));
+  const r  = ns / scale;
+  tx = cx - r * (cx - tx);
+  ty = cy - r * (cy - ty);
+  scale = ns;
+  applyTransform();
+}
+
+// Wheel zoom centred on cursor
+$viewport.addEventListener('wheel', e => {
+  e.preventDefault();
+  const r = $viewport.getBoundingClientRect();
+  zoomAt(e.deltaY < 0 ? 1 + CONFIG.zoomStep : 1 / (1 + CONFIG.zoomStep),
+         e.clientX - r.left, e.clientY - r.top);
+}, { passive: false });
+
+// Pointer pan
+$viewport.addEventListener('pointerdown', e => {
+  if (e.button !== 0) return;
+  isPanning = true;
+  panStart  = { x: e.clientX, y: e.clientY, tx, ty };
+  $viewport.setPointerCapture(e.pointerId);
+  $viewport.classList.add('panning');
+});
+$viewport.addEventListener('pointermove', e => {
+  if (!isPanning) return;
+  tx = panStart.tx + (e.clientX - panStart.x);
+  ty = panStart.ty + (e.clientY - panStart.y);
+  applyTransform();
+});
+$viewport.addEventListener('pointerup',     stopPan);
+$viewport.addEventListener('pointercancel', stopPan);
+function stopPan() { isPanning = false; $viewport.classList.remove('panning'); }
+
+// Toolbar controls
+document.getElementById('btn-zoom-in').addEventListener('click', () => {
+  const cx = $viewport.clientWidth / 2, cy = $viewport.clientHeight / 2;
+  zoomAt(1 + CONFIG.zoomStep, cx, cy);
+});
+document.getElementById('btn-zoom-out').addEventListener('click', () => {
+  const cx = $viewport.clientWidth / 2, cy = $viewport.clientHeight / 2;
+  zoomAt(1 / (1 + CONFIG.zoomStep), cx, cy);
+});
+document.getElementById('btn-one-to-one').addEventListener('click', () => {
+  scale = 1; tx = 0; ty = 0; applyTransform();
+});
+document.getElementById('btn-fit').addEventListener('click', fitToWindow);
+
+function fitToWindow() {
+  const svg = $stage.querySelector('svg');
+  if (!svg) return;
+
+  // Measure actual rendered size at scale=1 by temporarily clearing our transform.
+  // This handles any unit system (px, mm, cm, viewBox logical units, etc.)
+  const prev = $stage.style.transform;
+  $stage.style.transform = 'none';
+  const r = svg.getBoundingClientRect();
+  $stage.style.transform = prev;
+
+  const svgW = r.width;
+  const svgH = r.height;
+  if (!svgW || !svgH) return;
+
+  const pad = 24;
+  const vpW = $viewport.clientWidth;
+  const vpH = $viewport.clientHeight;
+  scale = Math.max(CONFIG.minZoom, Math.min(CONFIG.maxZoom,
+          Math.min((vpW - pad * 2) / svgW, (vpH - pad * 2) / svgH)));
+  tx = (vpW - svgW * scale) / 2;
+  ty = (vpH - svgH * scale) / 2;
+  applyTransform();
+}
+
+// ── VIEWBOX OVERLAY ──────────────────────────────────────────────────────
+function updateViewboxOverlay() {
+  // Remove any existing overlay
+  $stage.querySelectorAll('.vb-overlay').forEach(el => el.remove());
+  $noVbNote.hidden = true;
+
+  if (!viewboxOn) return;
+
+  const svg = $stage.querySelector('svg');
+  if (!svg) return;
+
+  const vb = svg.getAttribute('viewBox');
+  if (!vb) {
+    $noVbNote.hidden = false;
+    return;
+  }
+
+  // Measure SVG size in stage-local units (compensate for current scale)
+  const r    = svg.getBoundingClientRect();
+  const svgW = r.width  / scale;
+  const svgH = r.height / scale;
+
+  const el  = document.createElement('div');
+  el.className = 'vb-overlay';
+  el.style.width  = svgW + 'px';
+  el.style.height = svgH + 'px';
+
+  const lbl = document.createElement('span');
+  lbl.className   = 'vb-label';
+  lbl.textContent = `viewBox="${vb}"`;
+  el.appendChild(lbl);
+
+  $stage.appendChild(el);
+}
+
+$btnViewbox.addEventListener('click', () => {
+  viewboxOn = !viewboxOn;
+  $btnViewbox.classList.toggle('active', viewboxOn);
+  updateViewboxOverlay();
+});
+
+// ── FORMAT ───────────────────────────────────────────────────────────────
+document.getElementById('btn-format').addEventListener('click', () => {
+  const text = editorView.state.doc.toString();
+  try {
+    const pretty = xmlFormat(text, {
+      indentation:    ' '.repeat(indentSize),
+      collapseContent: true,
+      lineSeparator:  '\n',
+    });
+    editorView.dispatch({
+      changes: { from: 0, to: editorView.state.doc.length, insert: pretty },
+    });
+    showToast('Formatted');
+  } catch (e) {
+    showToast('Format failed: ' + e.message);
+  }
+});
+
+// ── COPY & DOWNLOAD ──────────────────────────────────────────────────────
+document.getElementById('btn-copy').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(editorView.state.doc.toString());
+    showToast('Copied to clipboard');
+  } catch {
+    showToast('Copy not available');
+  }
+});
+
+document.getElementById('btn-download').addEventListener('click', () => {
+  triggerDownload(editorView.state.doc.toString(), fileName);
+});
+
+function triggerDownload(text, name) {
+  const url = URL.createObjectURL(new Blob([text], { type: 'image/svg+xml' }));
+  const a   = Object.assign(document.createElement('a'), { href: url, download: name });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+// ── IDB HELPERS ──────────────────────────────────────────────────────────
+let _idb;
+function getDB() {
+  if (_idb) return Promise.resolve(_idb);
+  return new Promise((res, rej) => {
+    const r = indexedDB.open('svged', 1);
+    r.onupgradeneeded = e => e.target.result.createObjectStore('kv');
+    r.onsuccess = e => { _idb = e.target.result; res(_idb); };
+    r.onerror   = () => rej(r.error);
+  });
+}
+async function idbGet(key) {
+  const db = await getDB();
+  return new Promise((res, rej) => {
+    const r = db.transaction('kv').objectStore('kv').get(key);
+    r.onsuccess = () => res(r.result);
+    r.onerror   = () => rej(r.error);
+  });
+}
+async function idbSet(key, val) {
+  const db = await getDB();
+  return new Promise((res, rej) => {
+    const r = db.transaction('kv', 'readwrite').objectStore('kv').put(val, key);
+    r.onsuccess = () => res();
+    r.onerror   = () => rej(r.error);
+  });
+}
+
+// ── FILE OPEN ────────────────────────────────────────────────────────────
+document.getElementById('btn-open').addEventListener('click', openFile);
+$fileInput.addEventListener('change', () => {
+  if ($fileInput.files[0]) readFileObj($fileInput.files[0], null);
+  $fileInput.value = '';
+});
+
+async function openFile() {
+  if (window.showOpenFilePicker) {
+    try {
+      const startIn = await idbGet('lastHandle').catch(() => undefined);
+      const [handle] = await window.showOpenFilePicker({
+        types: [{ description: 'SVG files', accept: { 'image/svg+xml': ['.svg'] } }],
+        multiple: false,
+        ...(startIn && { startIn }),
+      });
+      const file = await handle.getFile();
+      idbSet('lastHandle', handle).catch(() => {});
+      readFileObj(file, handle);
+    } catch (e) {
+      if (e.name !== 'AbortError') showToast('Could not open file');
+    }
+  } else {
+    $fileInput.click();
+  }
+}
+
+function readFileObj(file, handle) {
+  const reader = new FileReader();
+  reader.onload = e => loadContent(e.target.result, file.name, handle);
+  reader.readAsText(file);
+}
+
+function detectIndent(text) {
+  const depths = [];
+  for (const line of text.split('\n')) {
+    const tabs = line.match(/^\t+/);
+    if (tabs) return 4;                       // file uses tabs → treat as 4
+    const spaces = line.match(/^ +/);
+    if (spaces) depths.push(spaces[0].length);
+  }
+  if (!depths.length) return null;
+  let g = depths[0];
+  for (let i = 1; i < depths.length; i++) {
+    let a = g, b = depths[i];
+    while (b) { [a, b] = [b, a % b]; }
+    g = a;
+  }
+  return g <= 2 ? 2 : g <= 4 ? 4 : 8;
+}
+
+function loadContent(text, name, handle) {
+  fileName   = name || 'untitled.svg';
+  fileHandle = handle;
+  $filename.textContent = fileName;
+  const effects = [];
+  const detected = detectIndent(text);
+  if (detected && detected !== indentSize) {
+    indentSize = detected;
+    $indentSelect.value = String(indentSize);
+    effects.push(indentComp.reconfigure([
+      indentUnit.of(' '.repeat(indentSize)),
+      EditorState.tabSize.of(indentSize),
+    ]));
+  }
+  editorView.dispatch({
+    changes: { from: 0, to: editorView.state.doc.length, insert: text },
+    effects,
+  });
+  scale = 1; tx = 0; ty = 0;
+  applyTransform();
+  pendingFit = true;
+  showToast(`Opened ${fileName}`);
+}
+
+// ── FILE SAVE ────────────────────────────────────────────────────────────
+document.getElementById('btn-save').addEventListener('click',   saveFile);
+document.getElementById('btn-saveas').addEventListener('click', saveAs);
+
+async function saveFile() {
+  if (fileHandle) {
+    await writeHandle(fileHandle);
+  } else {
+    await saveAs();
+  }
+}
+
+async function saveAs() {
+  if (window.showSaveFilePicker) {
+    try {
+      const startIn = await idbGet('lastHandle').catch(() => undefined);
+      const handle = await window.showSaveFilePicker({
+        suggestedName: fileName,
+        types: [{ description: 'SVG files', accept: { 'image/svg+xml': ['.svg'] } }],
+        ...(startIn && { startIn }),
+      });
+      idbSet('lastHandle', handle).catch(() => {});
+      fileHandle = handle;
+      fileName   = handle.name;
+      $filename.textContent = fileName;
+      await writeHandle(handle);
+    } catch (e) {
+      if (e.name !== 'AbortError') triggerDownload(editorView.state.doc.toString(), fileName);
+    }
+  } else {
+    triggerDownload(editorView.state.doc.toString(), fileName);
+  }
+}
+
+async function writeHandle(handle) {
+  try {
+    const w = await handle.createWritable();
+    await w.write(editorView.state.doc.toString());
+    await w.close();
+    showToast(`Saved ${fileName}`);
+  } catch (e) {
+    showToast('Save failed: ' + e.message);
+  }
+}
+
+// ── DRAG & DROP ──────────────────────────────────────────────────────────
+document.addEventListener('dragover', e => e.preventDefault());
+document.addEventListener('drop', e => {
+  e.preventDefault();
+  const file = e.dataTransfer?.files?.[0];
+  if (file && (file.type === 'image/svg+xml' || file.name?.endsWith('.svg'))) {
+    readFileObj(file, null);
+  }
+});
+
+// ── TOAST ────────────────────────────────────────────────────────────────
+let toastTimer;
+function showToast(msg) {
+  $toast.textContent = msg;
+  $toast.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => $toast.classList.remove('show'), 2400);
+}
+
+// ── KEYBOARD SHORTCUTS ───────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  const mod = e.ctrlKey || e.metaKey;
+  if (!mod) return;
+  if (e.key === 's' && !e.shiftKey) { e.preventDefault(); saveFile(); }
+  if (e.key === 'S' &&  e.shiftKey) { e.preventDefault(); saveAs();   }
+  if (e.key === 'o')                { e.preventDefault(); openFile(); }
+  if (e.key === '0')                { e.preventDefault(); fitToWindow(); }
+  if (e.key === '=' || e.key === '+') {
+    e.preventDefault();
+    const cx = $viewport.clientWidth/2, cy = $viewport.clientHeight/2;
+    zoomAt(1 + CONFIG.zoomStep, cx, cy);
+  }
+  if (e.key === '-') {
+    e.preventDefault();
+    const cx = $viewport.clientWidth/2, cy = $viewport.clientHeight/2;
+    zoomAt(1 / (1 + CONFIG.zoomStep), cx, cy);
+  }
+});
+
+// ── INIT ─────────────────────────────────────────────────────────────────
+scheduleRender();
+</script>
+</body>
+</html>
