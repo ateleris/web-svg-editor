@@ -1035,7 +1035,8 @@ const animState = {
 };
 
 function computeAnimDuration(svg) {
-  const allElems = [...svg.querySelectorAll('animate, animateTransform, animateMotion, animateColor, set')];
+  const allElems = [...svg.querySelectorAll('animate, animateTransform, animateMotion, animateColor, set')]
+    .filter(el => !el.closest('defs'));
   if (!allElems.length) return { count: 0, duration: 0, looping: false };
 
   // Build ID → element map for dependency resolution
@@ -1084,7 +1085,7 @@ function computeAnimDuration(svg) {
     if (clk !== null) return clk;
     if (ref === 'indefinite') return null;
 
-    const m = ref.match(/^([\w-]+)\.(begin|end)(?:([+-])([\d.]+\s*(?:h|min|ms|s)?))?$/i);
+    const m = ref.match(/^([\w-]+)\.(begin|end)(?:\s*([+-])\s*([\d.]+\s*(?:h|min|ms|s)?))?$/i);
     if (!m) return null;
 
     const [, refId, event, sign, offsetStr] = m;
@@ -1103,11 +1104,16 @@ function computeAnimDuration(svg) {
     inBeginStack.add(el);
 
     const prev = cycleHit; cycleHit = false;
-    const parts = (el.getAttribute('begin') || '0').split(';').map(s => s.trim()).filter(Boolean);
+    const raw   = el.getAttribute('begin');
+    const parts = (raw ?? '0').split(';').map(s => s.trim()).filter(Boolean);
     const times = parts.map(resolveRef).filter(v => v !== null);
-    const result = times.length > 0 ? Math.min(...times) : 0;
-    const had = cycleHit; cycleHit = prev || had;
 
+    let result;
+    if (times.length > 0)  result = Math.min(...times); // at least one resolved
+    else if (raw === null)  result = 0;                 // attr absent → SMIL default 0
+    else                    result = null;              // attr present but unresolvable (click, indefinite…)
+
+    const had = cycleHit; cycleHit = prev || had;
     inBeginStack.delete(el);
     if (!had) beginCache.set(el, result);
     return result;
@@ -1120,6 +1126,13 @@ function computeAnimDuration(svg) {
 
     const prev = cycleHit; cycleHit = false;
     const beginTime    = getBeginTime(el);
+    if (beginTime === null) {
+      // Element never fires (e.g. begin="click", begin="indefinite") — skip.
+      const had = cycleHit; cycleHit = prev || had;
+      inEndStack.delete(el);
+      if (!had) endCache.set(el, null);
+      return null;
+    }
     const endStr       = el.getAttribute('end');
     const durStr       = el.getAttribute('dur');
     const repeatCount  = el.getAttribute('repeatCount') || '1';
@@ -1143,6 +1156,13 @@ function computeAnimDuration(svg) {
         }
       }
     }
+    // For indefinitely-repeating animations, use one cycle (begin + dur) as the display period.
+    if (result === null && durStr && durStr !== 'indefinite') {
+      const dur = parseClockVal(durStr);
+      if (dur !== null) result = beginTime + dur;
+    }
+    // Guard: end must not precede begin (e.g. end="x.begin" where x starts later).
+    if (result !== null && beginTime !== null && result < beginTime) result = beginTime;
 
     const had = cycleHit; cycleHit = prev || had;
     inEndStack.delete(el);
