@@ -375,6 +375,47 @@
       flex-shrink: 0;
     }
     #anim-speed:hover { background: var(--btn-hover); }
+
+    /* ── MP4 Export Modal ────────────────────────────────────────────── */
+    dialog#mp4-modal {
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0;
+      min-width: 340px;
+    }
+    dialog#mp4-modal::backdrop { background: rgba(0,0,0,.5); }
+    #mp4-form { padding: 16px; display: flex; flex-direction: column; gap: 0; }
+    #mp4-fields { display: flex; flex-direction: column; gap: 10px; }
+    #mp4-fields h2 { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
+    #mp4-fields label {
+      display: grid;
+      grid-template-columns: 100px 1fr;
+      gap: 8px;
+      align-items: center;
+      font-size: 12px;
+    }
+    #mp4-fields input, #mp4-fields select {
+      background: var(--btn-bg);
+      color: var(--text);
+      border: 1px solid transparent;
+      border-radius: 5px;
+      padding: 4px 8px;
+      font-size: 12px;
+      width: 100%;
+    }
+    #mp4-custom-size { display: flex; gap: 8px; padding-left: 108px; }
+    #mp4-custom-size label { grid-template-columns: 16px 1fr; }
+    #mp4-fields input:disabled, #mp4-fields select:disabled { opacity: 0.45; cursor: not-allowed; }
+    #mp4-loops-row { display: flex; flex-direction: column; gap: 4px; }
+    #mp4-loop-hint { font-size: 11px; color: var(--text-muted); padding-left: 108px; }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+    #mp4-go { background: var(--overlay); color: var(--overlay-text); }
+    #mp4-go:hover { filter: brightness(1.1); }
+    #mp4-progress { display: flex; flex-direction: column; gap: 10px; padding-top: 4px; }
+    #mp4-progress progress { width: 100%; height: 8px; border-radius: 4px; border: none; }
+    #mp4-progress-label { font-size: 12px; color: var(--text-muted); }
   </style>
 </head>
 <body>
@@ -387,6 +428,7 @@
     <span class="sep"></span>
     <button class="btn" id="btn-copy">Copy</button>
     <button class="btn" id="btn-download">↓ Download</button>
+    <button class="btn" id="btn-export-mp4">🎬 Export MP4</button>
     <span class="sep"></span>
     <button class="btn" id="btn-format">⌥ Format</button>
     <span class="sep"></span>
@@ -436,6 +478,51 @@
 
 <div id="toast"></div>
 <input type="file" id="file-input" accept=".svg,image/svg+xml">
+
+<dialog id="mp4-modal">
+  <form id="mp4-form" method="dialog">
+    <div id="mp4-fields">
+      <h2>Export MP4</h2>
+      <label>Duration (s)
+        <input type="number" id="mp4-duration" step="0.1" min="0.1" value="5" required>
+      </label>
+      <label>FPS
+        <select id="mp4-fps">
+          <option value="24">24</option>
+          <option value="30" selected>30</option>
+          <option value="60">60</option>
+        </select>
+      </label>
+      <label>Resolution
+        <select id="mp4-res">
+          <option value="match">Match SVG</option>
+          <option value="720">720p (1280×720)</option>
+          <option value="1080" selected>1080p (1920×1080)</option>
+          <option value="custom">Custom…</option>
+        </select>
+      </label>
+      <div id="mp4-custom-size">
+        <label>W <input type="number" id="mp4-w" min="16" step="2" value="1920"></label>
+        <label>H <input type="number" id="mp4-h" min="16" step="2" value="1080"></label>
+      </div>
+      <div id="mp4-loops-row" hidden>
+        <label>Loops
+          <input type="number" id="mp4-loops" min="1" value="1">
+        </label>
+        <span id="mp4-loop-hint"></span>
+      </div>
+      <div class="modal-actions">
+        <button type="button" id="mp4-cancel" class="btn">Cancel</button>
+        <button type="submit" id="mp4-go" class="btn">Export</button>
+      </div>
+    </div>
+    <div id="mp4-progress" hidden>
+      <progress id="mp4-bar" max="100" value="0"></progress>
+      <span id="mp4-progress-label">Encoding… 0%</span>
+      <button type="button" id="mp4-abort" class="btn">Cancel</button>
+    </div>
+  </form>
+</dialog>
 
 <script type="importmap">
 {
@@ -504,6 +591,7 @@ import { xml }                      from '@codemirror/lang-xml';
 import { oneDark }                  from '@codemirror/theme-one-dark';
 import DOMPurify                    from 'https://esm.sh/dompurify@3';
 import xmlFormat                    from 'https://esm.sh/xml-formatter@3';
+import { Muxer, ArrayBufferTarget } from 'https://esm.sh/mp4-muxer@5';
 
 // ── DOM REFS ────────────────────────────────────────────────────────────
 const $split      = document.getElementById('split');
@@ -1034,10 +1122,10 @@ const animState = {
   wasPlayingBeforeScrub: true,
 };
 
-function computeAnimDuration(svg) {
+function computeAnimDuration(svg, { full = false } = {}) {
   const allElems = [...svg.querySelectorAll('animate, animateTransform, animateMotion, animateColor, set')]
     .filter(el => !el.closest('defs'));
-  if (!allElems.length) return { count: 0, duration: 0, looping: false };
+  if (!allElems.length) return { count: 0, duration: 0, looping: false, ...(full ? { timings: new Map() } : {}) };
 
   // Build ID → element map for dependency resolution
   const idMap = {};
@@ -1191,8 +1279,22 @@ function computeAnimDuration(svg) {
     if (times.length >= 2 && times[1] > maxEnd) { maxEnd = times[1]; hasFinite = true; }
   }
 
-  if (!hasFinite) return { count: allElems.length, duration: 0, looping };
-  return { count: allElems.length, duration: maxEnd, looping };
+  function collectTimings() {
+    const map = new Map();
+    for (const el of allElems) {
+      map.set(el, {
+        begin:       getBeginTime(el),
+        end:         getEndTime(el),
+        dur:         parseClockVal(el.getAttribute('dur')),
+        repeatCount: el.getAttribute('repeatCount') || '1',
+        repeatDur:   el.getAttribute('repeatDur')   || '',
+      });
+    }
+    return map;
+  }
+
+  if (!hasFinite) return { count: allElems.length, duration: 0, looping, ...(full ? { timings: collectTimings() } : {}) };
+  return { count: allElems.length, duration: maxEnd, looping, ...(full ? { timings: collectTimings() } : {}) };
 }
 
 function formatTime(s) {
@@ -1325,6 +1427,276 @@ $animTrack.addEventListener('pointerup', () => {
 $animTrack.addEventListener('pointercancel', () => {
   animState.scrubbing = false;
   animState.lastRaf   = 0;
+});
+
+// ── MP4 EXPORT ───────────────────────────────────────────────────────────
+const $mp4Modal    = document.getElementById('mp4-modal');
+const $mp4Form     = document.getElementById('mp4-form');
+const $mp4Fields   = document.getElementById('mp4-fields');
+const $mp4Duration = document.getElementById('mp4-duration');
+const $mp4Fps      = document.getElementById('mp4-fps');
+const $mp4Res      = document.getElementById('mp4-res');
+const $mp4Loops    = document.getElementById('mp4-loops');
+const $mp4LoopsRow = document.getElementById('mp4-loops-row');
+const $mp4LoopHint = document.getElementById('mp4-loop-hint');
+const $mp4W        = document.getElementById('mp4-w');
+const $mp4H        = document.getElementById('mp4-h');
+const $mp4Custom   = document.getElementById('mp4-custom-size');
+const $mp4Cancel   = document.getElementById('mp4-cancel');
+const $mp4Progress = document.getElementById('mp4-progress');
+const $mp4Bar      = document.getElementById('mp4-bar');
+const $mp4Label    = document.getElementById('mp4-progress-label');
+const $mp4Abort    = document.getElementById('mp4-abort');
+const $btnExport   = document.getElementById('btn-export-mp4');
+
+let exportCtrl = null;
+
+function mp4Supported() {
+  return typeof VideoEncoder !== 'undefined' && typeof VideoFrame !== 'undefined';
+}
+
+function openExportModal() {
+  if (!mp4Supported()) {
+    showToast('MP4 export needs Chrome 94+, Edge 94+, Safari 16.4+, or Firefox 130+');
+    return;
+  }
+  const svg = getAnimSvg();
+  const { duration, looping } = svg
+    ? computeAnimDuration(svg)
+    : { duration: 0, looping: false };
+
+  $mp4Duration.value       = duration > 0 ? +duration.toFixed(3) : 3;
+  $mp4Fps.value            = '30';
+  $mp4Res.value            = '1080';
+  $mp4Loops.value          = '1';
+  $mp4LoopsRow.hidden      = !looping;
+  $mp4LoopHint.textContent = looping ? '(total = duration × loops)' : '';
+
+  syncResolutionInputs();
+  setModalMode('form');
+  $mp4Modal.showModal();
+}
+
+function closeExportModal() { $mp4Modal.close(); }
+
+function setModalMode(mode) {
+  $mp4Fields.hidden   = mode !== 'form';
+  $mp4Progress.hidden = mode !== 'progress';
+}
+
+function syncResolutionInputs() {
+  const mode   = $mp4Res.value;
+  const isCustom = mode === 'custom';
+  $mp4W.disabled = !isCustom;
+  $mp4H.disabled = !isCustom;
+  if (isCustom) return;
+
+  let w, h;
+  switch (mode) {
+    case 'match': {
+      const svg  = getAnimSvg();
+      const rect = svg ? svg.getBoundingClientRect() : null;
+      w = rect ? Math.round(rect.width  / scale) : 800;
+      h = rect ? Math.round(rect.height / scale) : 600;
+      break;
+    }
+    case '720':  w = 1280; h = 720;  break;
+    case '1080': w = 1920; h = 1080; break;
+  }
+  $mp4W.value = (w & ~1) || 2;
+  $mp4H.value = (h & ~1) || 2;
+}
+
+function resolveResolution() {
+  const w = parseInt($mp4W.value, 10) || 800;
+  const h = parseInt($mp4H.value, 10) || 600;
+  return { width: (w & ~1) || 2, height: (h & ~1) || 2 };
+}
+
+async function pickCodec(width, height, fps) {
+  const candidates = ['avc1.640034', 'avc1.4D0028', 'avc1.42E01E'];
+  for (const codec of candidates) {
+    try {
+      const { supported } = await VideoEncoder.isConfigSupported(
+        { codec, width, height, framerate: fps }
+      );
+      if (supported) return codec;
+    } catch (_) {}
+  }
+  return candidates[0];
+}
+
+function buildFrameSvg(svgEl, timingsMap, t) {
+  const clone      = svgEl.cloneNode(true);
+  const origElems  = [...svgEl.querySelectorAll(
+    'animate, animateTransform, animateMotion, animateColor, set'
+  )].filter(el => !el.closest('defs'));
+  const cloneElems = [...clone.querySelectorAll(
+    'animate, animateTransform, animateMotion, animateColor, set'
+  )].filter(el => !el.closest('defs'));
+
+  for (let i = 0; i < origElems.length; i++) {
+    const timing  = timingsMap.get(origElems[i]);
+    const cloneEl = cloneElems[i];
+    if (!timing || !cloneEl) continue;
+
+    const { begin: T_begin, end: T_end, dur, repeatCount, repeatDur } = timing;
+    if (T_begin === null) continue; // unresolvable (click, etc.) — leave alone
+
+    const isLooping = repeatCount === 'indefinite' || repeatDur === 'indefinite';
+
+    if (isLooping && dur !== null && dur > 0) {
+      const elapsed = Math.max(0, t - T_begin);
+      const phase   = elapsed % dur;
+      // Shift begin so the animation is at `phase` into its cycle at SVG-time 0.
+      // Keep original dur so the interpolation fraction is correct.
+      cloneEl.setAttribute('begin', `${-phase}s`);
+      cloneEl.setAttribute('dur',   `${dur}s`);
+      cloneEl.removeAttribute('repeatCount');
+      cloneEl.removeAttribute('repeatDur');
+    } else {
+      cloneEl.setAttribute('begin', `${T_begin - t}s`);
+      if (T_end !== null) cloneEl.setAttribute('end', `${T_end - t}s`);
+      cloneEl.removeAttribute('repeatCount');
+      cloneEl.removeAttribute('repeatDur');
+    }
+    // Hold final value when the active duration has elapsed.
+    cloneEl.setAttribute('fill', 'freeze');
+  }
+
+  // Synthesize viewBox if missing so the image renders at the correct aspect ratio.
+  if (!clone.hasAttribute('viewBox')) {
+    try {
+      const b = svgEl.getBBox();
+      if (b.width > 0 && b.height > 0)
+        clone.setAttribute('viewBox', `${b.x} ${b.y} ${b.width} ${b.height}`);
+    } catch (_) {}
+  }
+
+  return new XMLSerializer().serializeToString(clone);
+}
+
+function loadSvgImage(svgString) {
+  return new Promise((resolve, reject) => {
+    const b64  = btoa(unescape(encodeURIComponent(svgString)));
+    const img  = new Image();
+    img.onload  = () => resolve(img);
+    img.onerror = () => reject(new Error('SVG frame load failed'));
+    img.src = `data:image/svg+xml;base64,${b64}`;
+  });
+}
+
+async function renderFrameToCanvas(svgString, ctx, width, height) {
+  const img = await loadSvgImage(svgString);
+  ctx.clearRect(0, 0, width, height);
+  ctx.drawImage(img, 0, 0, width, height);
+}
+
+function triggerDownloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a   = Object.assign(document.createElement('a'), { href: url, download: name });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+async function runExport() {
+  const svg = getAnimSvg();
+  if (!svg) { showToast('No SVG to export'); closeExportModal(); return; }
+
+  const fps      = parseInt($mp4Fps.value, 10)      || 30;
+  const duration = parseFloat($mp4Duration.value)   || 3;
+  const loops    = Math.max(1, parseInt($mp4Loops.value, 10) || 1);
+  const { looping, timings } = computeAnimDuration(svg, { full: true });
+  const totalDur    = looping ? duration * loops : duration;
+  const totalFrames = Math.ceil(totalDur * fps);
+  const { width, height } = resolveResolution();
+  const codec    = await pickCodec(width, height, fps);
+  const bitrate  = Math.min(20_000_000, Math.max(1_000_000, width * height * fps * 0.1));
+
+  setModalMode('progress');
+  $mp4Bar.max   = totalFrames;
+  $mp4Bar.value = 0;
+  $mp4Label.textContent = 'Encoding… 0%';
+
+  const canvas = new OffscreenCanvas(width, height);
+  const ctx    = canvas.getContext('2d');
+  const target = new ArrayBufferTarget();
+  const muxer  = new Muxer({
+    target,
+    video:     { codec: 'avc', width, height, frameRate: fps },
+    fastStart: 'in-memory',
+  });
+
+  const ctrl = { cancelled: false, encoder: null };
+  exportCtrl  = ctrl;
+  $btnExport.disabled = true;
+
+  const encoder = new VideoEncoder({
+    output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+    error:  e => { if (!ctrl.cancelled) abortExport(e); },
+  });
+  ctrl.encoder = encoder;
+
+  try {
+    encoder.configure({ codec, width, height, bitrate, framerate: fps,
+      hardwareAcceleration: 'prefer-hardware', latencyMode: 'quality' });
+  } catch (e) { abortExport(e); return; }
+
+  try {
+    for (let i = 0; i < totalFrames; i++) {
+      if (ctrl.cancelled) break;
+
+      const rawT   = i / fps;
+      const t      = looping ? rawT % duration : Math.min(rawT, duration);
+      const svgStr = buildFrameSvg(svg, timings, t);
+
+      await renderFrameToCanvas(svgStr, ctx, width, height);
+
+      const timestamp = Math.round(i * 1_000_000 / fps);
+      const frameDur  = Math.round(1_000_000 / fps);
+      const vf        = new VideoFrame(canvas, { timestamp, duration: frameDur });
+      while (encoder.encodeQueueSize > 4) await new Promise(r => setTimeout(r, 0));
+      encoder.encode(vf, { keyFrame: i % (2 * fps) === 0 });
+      vf.close();
+
+      $mp4Bar.value = i + 1;
+      $mp4Label.textContent = `Encoding… ${Math.round((i + 1) / totalFrames * 100)}%`;
+    }
+
+    if (!ctrl.cancelled) {
+      await encoder.flush();
+      muxer.finalize();
+      const blob = new Blob([target.buffer], { type: 'video/mp4' });
+      triggerDownloadBlob(blob, fileName.replace(/\.svg$/i, '') + '.mp4');
+      showToast('MP4 exported!');
+    }
+  } catch (e) {
+    if (!ctrl.cancelled) abortExport(e);
+    return;
+  } finally {
+    try { encoder.close(); } catch (_) {}
+    exportCtrl          = null;
+    $btnExport.disabled = false;
+    closeExportModal();
+  }
+}
+
+function abortExport(err) {
+  if (exportCtrl) exportCtrl.cancelled = true;
+  try { exportCtrl?.encoder?.close(); } catch (_) {}
+  exportCtrl          = null;
+  $btnExport.disabled = false;
+  if (err) showToast('Export failed: ' + (err.message ?? String(err)));
+  closeExportModal();
+}
+
+$btnExport.addEventListener('click',  openExportModal);
+$mp4Cancel.addEventListener('click',  closeExportModal);
+$mp4Abort.addEventListener('click',   () => abortExport(null));
+$mp4Res.addEventListener('change',    syncResolutionInputs);
+$mp4Form.addEventListener('submit',   e  => { e.preventDefault(); runExport(); });
+$mp4Modal.addEventListener('cancel',  e  => {
+  if (exportCtrl) { e.preventDefault(); abortExport(null); }
 });
 
 // ── INIT ─────────────────────────────────────────────────────────────────
