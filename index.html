@@ -709,31 +709,31 @@ const CONFIG = {
      width="400" height="400"
      viewBox="0 0 400 400">
 
-  <!-- Background -->
-  <rect width="400" height="400" fill="#1e1e2e"/>
+    <!-- Background -->
+    <rect width="400" height="400" fill="#1e1e2e"/>
 
-  <!-- Rings -->
-  <circle cx="200" cy="200" r="140" fill="none" stroke="#cba6f7" stroke-width="1.5" opacity=".35"/>
-  <circle cx="200" cy="200" r="100" fill="none" stroke="#89b4fa" stroke-width="1.5" opacity=".55"/>
-  <circle cx="200" cy="200" r="60"  fill="none" stroke="#a6e3a1" stroke-width="1.5" opacity=".75"/>
+    <!-- Rings -->
+    <circle cx="200" cy="200" r="140" fill="none" stroke="#cba6f7" stroke-width="1.5" opacity=".35"/>
+    <circle cx="200" cy="200" r="100" fill="none" stroke="#89b4fa" stroke-width="1.5" opacity=".55"/>
+    <circle cx="200" cy="200" r="60"  fill="none" stroke="#a6e3a1" stroke-width="1.5" opacity=".75"/>
 
-  <!-- Triangle -->
-  <polygon points="200,80 310,260 90,260"
-           fill="#cba6f7" fill-opacity=".2"
-           stroke="#cba6f7" stroke-width="1.5">
-    <animateTransform attributeName="transform" type="rotate" from="0 200 200" to="360 200 200" dur="5s" repeatDur="indefinite"/>
-  </polygon>
+    <!-- Triangle -->
+    <polygon points="200,80 310,260 90,260"
+             fill="#cba6f7" fill-opacity=".2"
+             stroke="#cba6f7" stroke-width="1.5">
+        <animateTransform attributeName="transform" type="rotate" from="0 200 200" to="360 200 200" dur="5s" repeatDur="indefinite"/>
+    </polygon>
 
-  <!-- Vertex dots -->
-  <circle cx="200" cy="80"  r="5" fill="#f38ba8"/>
-  <circle cx="310" cy="260" r="5" fill="#89b4fa"/>
-  <circle cx="90"  cy="260" r="5" fill="#a6e3a1"/>
-  <circle cx="200" cy="200" r="7" fill="#cba6f7"/>
+    <!-- Vertex dots -->
+    <circle cx="200" cy="80"  r="5" fill="#f38ba8"/>
+    <circle cx="310" cy="260" r="5" fill="#89b4fa"/>
+    <circle cx="90"  cy="260" r="5" fill="#a6e3a1"/>
+    <circle cx="200" cy="200" r="7" fill="#cba6f7"/>
 
-  <!-- Label -->
-  <text x="200" y="358"
-        font-family="system-ui, sans-serif" font-size="13"
-        fill="#6c7086" text-anchor="middle">SVG Editor</text>
+    <!-- Label -->
+    <text x="200" y="358"
+          font-family="system-ui, sans-serif" font-size="13"
+          fill="#6c7086" text-anchor="middle">SVG Editor</text>
 
 </svg>`,
 };
@@ -1587,8 +1587,14 @@ $btnTheme.addEventListener('click', () => setTheme(!isDark));
 const $indentSelect = document.getElementById('indent-select');
 {
   const saved = parseInt(localStorage.getItem('svged-indent') || '');
-  indentSize = [2, 4, 8].includes(saved) ? saved : CONFIG.defaultIndent;
+  indentSize = [2, 4, 8].includes(saved)
+    ? saved
+    : (detectIndent(CONFIG.defaultSvg) ?? CONFIG.defaultIndent);
   $indentSelect.value = String(indentSize);
+  editorView.dispatch({ effects: indentComp.reconfigure([
+    indentUnit.of(' '.repeat(indentSize)),
+    EditorState.tabSize.of(indentSize),
+  ]) });
 }
 $indentSelect.addEventListener('change', () => {
   indentSize = parseInt($indentSelect.value);
