@@ -150,7 +150,8 @@
 
     /* ── Editor pane ──────────────────────────────────────────────── */
     #editor-pane {
-      overflow: hidden;
+      overflow: visible;
+      position: relative;
       min-width: 160px;
       background: var(--surface);
     }
@@ -273,6 +274,41 @@
     }
 
     /* ── Legend ──────────────────────────────────────────────────── */
+    #editor-legend {
+      position: absolute;
+      top: 8px; right: 10px;
+      z-index: 15;
+      font-family: monospace;
+    }
+    #editor-legend-toggle {
+      width: 26px; height: 26px;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+      border-radius: 50%;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      opacity: 0.55;
+    }
+    #editor-legend-toggle:hover { opacity: 1; }
+    #editor-legend.open #editor-legend-toggle { opacity: 1; }
+    #editor-legend-panel {
+      position: absolute;
+      top: 32px; right: 0;
+      min-width: 240px;
+      width: max-content;
+      padding: 10px 12px;
+      background: var(--toolbar-bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 12px;
+      backdrop-filter: blur(4px);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    }
     #legend {
       position: absolute;
       top: 8px; right: 10px;
@@ -298,6 +334,7 @@
       position: absolute;
       top: 32px; right: 0;
       min-width: 240px;
+      width: max-content;
       padding: 10px 12px;
       background: var(--toolbar-bg);
       color: var(--text);
@@ -316,7 +353,7 @@
       font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
       color: var(--text-muted);
     }
-    .legend-row { display: flex; justify-content: space-between; gap: 12px; line-height: 1.8; margin-bottom: 4px; }
+    .legend-row { display: flex; justify-content: space-between; gap: 12px; line-height: 1.8; margin-bottom: 4px; white-space: nowrap; }
     .legend-row:last-child { margin-bottom: 0; }
     .legend-row.overridden { opacity: 0.4; }
     .legend-row.overridden span:last-child { text-decoration: line-through; }
@@ -530,7 +567,21 @@
   </div>
 
   <div id="split">
-    <div id="editor-pane"><div id="editor"></div></div>
+    <div id="editor-pane">
+      <div id="editor"></div>
+      <div id="editor-legend">
+        <button id="editor-legend-toggle" class="btn" title="Show editor shortcuts">?</button>
+        <div id="editor-legend-panel" hidden>
+          <div class="legend-section">
+            <div class="legend-title">Autocomplete</div>
+            <div class="legend-row"><span><kbd>Ctrl</kbd>+<kbd>Space</kbd></span><span>Trigger manually</span></div>
+            <div class="legend-row"><span><kbd>↑</kbd> / <kbd>↓</kbd></span><span>Navigate suggestions</span></div>
+            <div class="legend-row"><span><kbd>Enter</kbd> / <kbd>Tab</kbd></span><span>Accept suggestion</span></div>
+            <div class="legend-row"><span><kbd>Esc</kbd></span><span>Dismiss</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
     <div id="gutter"></div>
     <div id="preview-pane">
       <div id="viewport">
@@ -545,9 +596,6 @@
             <div class="legend-section" data-section="nav">
               <div class="legend-title">Navigation</div>
               <div class="legend-row" data-overridden-by-inspect><span><kbd>Wheel</kbd></span><span>Zoom</span></div>
-              <div class="legend-row"><span><kbd>Ctrl</kbd>+<kbd>Space</kbd></span><span>Attribute autocomplete</span></div>
-              <div class="legend-row"><span><kbd>↑</kbd> / <kbd>↓</kbd></span><span>Navigate suggestions</span></div>
-              <div class="legend-row"><span><kbd>Enter</kbd> / <kbd>Tab</kbd></span><span>Accept suggestion</span></div>
               <div class="legend-row"><span><kbd>Drag</kbd></span><span>Pan</span></div>
               <div class="legend-row"><span><kbd>Ctrl</kbd>+<kbd>↑</kbd></span><span>Fit to window</span></div>
               <div class="legend-row"><span><kbd>Ctrl</kbd>+<kbd>↓</kbd></span><span>Actual size (1:1)</span></div>
@@ -1435,7 +1483,19 @@ function updateLegendContext() {
 }
 $legendToggle.addEventListener('pointerdown', e => e.stopPropagation());
 $legendToggle.addEventListener('click', e => { e.stopPropagation(); setLegendOpen($legendPanel.hidden); });
-setLegendOpen(true);
+setLegendOpen(localStorage.getItem('svged-legend-open') !== '0');
+
+const $editorLegend       = document.getElementById('editor-legend');
+const $editorLegendToggle = document.getElementById('editor-legend-toggle');
+const $editorLegendPanel  = document.getElementById('editor-legend-panel');
+function setEditorLegendOpen(open) {
+  $editorLegend.classList.toggle('open', open);
+  $editorLegendPanel.hidden = !open;
+  localStorage.setItem('svged-editor-legend-open', open ? '1' : '0');
+}
+$editorLegendToggle.addEventListener('pointerdown', e => e.stopPropagation());
+$editorLegendToggle.addEventListener('click', e => { e.stopPropagation(); setEditorLegendOpen($editorLegendPanel.hidden); });
+setEditorLegendOpen(localStorage.getItem('svged-editor-legend-open') === '1');
 // updateLegendContext() deferred — animState not yet declared; called by initAnimController
 
 // ── FORMAT ───────────────────────────────────────────────────────────────
