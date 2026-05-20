@@ -272,6 +272,59 @@
       backdrop-filter: blur(4px);
     }
 
+    /* ── Legend ──────────────────────────────────────────────────── */
+    #legend {
+      position: absolute;
+      top: 8px; right: 10px;
+      z-index: 15;
+      font-family: monospace;
+    }
+    #legend-toggle {
+      width: 26px; height: 26px;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+      border-radius: 50%;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      opacity: 0.55;
+    }
+    #legend-toggle:hover { opacity: 1; }
+    #legend.open #legend-toggle { opacity: 1; }
+    #legend-panel {
+      position: absolute;
+      top: 32px; right: 0;
+      min-width: 240px;
+      padding: 10px 12px;
+      background: var(--toolbar-bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 12px;
+      backdrop-filter: blur(4px);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    }
+    .legend-section + .legend-section {
+      margin-top: 10px; padding-top: 10px;
+      border-top: 1px solid var(--border);
+    }
+    .legend-title {
+      font-weight: 700; margin-bottom: 6px;
+      font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--text-muted);
+    }
+    .legend-row { display: flex; justify-content: space-between; gap: 12px; line-height: 1.8; margin-bottom: 4px; }
+    .legend-row:last-child { margin-bottom: 0; }
+    .legend-row kbd {
+      display: inline-block; padding: 1px 6px;
+      background: var(--btn-bg);
+      color: var(--text);
+      border-radius: 3px; font-size: 11px;
+    }
+
     /* ── Toast ────────────────────────────────────────────────────── */
     #toast {
       position: fixed;
@@ -484,6 +537,29 @@
         <div id="viewbox-frame"><span class="vb-label"></span></div>
         <div id="no-vb-note" hidden>no viewBox set</div>
         <div id="zoom-badge">100%</div>
+        <div id="legend">
+          <button id="legend-toggle" class="btn" title="Show keyboard shortcuts">?</button>
+          <div id="legend-panel" hidden>
+            <div class="legend-section" data-section="nav">
+              <div class="legend-title">Navigation</div>
+              <div class="legend-row"><span><kbd>Wheel</kbd></span><span>Zoom</span></div>
+              <div class="legend-row"><span><kbd>Drag</kbd></span><span>Pan</span></div>
+              <div class="legend-row"><span><kbd>Ctrl</kbd>+<kbd>0</kbd></span><span>Fit to window</span></div>
+              <div class="legend-row"><span><kbd>Ctrl</kbd>+<kbd>=</kbd> / <kbd>−</kbd></span><span>Zoom in / out</span></div>
+            </div>
+            <div class="legend-section" data-section="inspect" hidden>
+              <div class="legend-title">Inspect mode</div>
+              <div class="legend-row"><span><kbd>Hover</kbd></span><span>Highlight element + code</span></div>
+              <div class="legend-row"><span><kbd>Click</kbd></span><span>Pin cursor in editor</span></div>
+              <div class="legend-row"><span><kbd>Wheel</kbd></span><span>Cycle stacked layers</span></div>
+            </div>
+            <div class="legend-section" data-section="anim" hidden>
+              <div class="legend-title">Animation</div>
+              <div class="legend-row"><span><kbd>Space</kbd></span><span>Play / Pause</span></div>
+              <div class="legend-row"><span><kbd>←</kbd> / <kbd>→</kbd></span><span>Step one frame</span></div>
+            </div>
+          </div>
+        </div>
       </div>
       <div id="anim-bar" hidden>
         <button class="btn anim-btn" id="anim-play"    title="Play / Pause (Space)">▶</button>
@@ -1085,7 +1161,29 @@ $btnInspect.addEventListener('click', () => {
   $btnInspect.classList.toggle('active', inspectOn);
   document.body.classList.toggle('inspect-mode', inspectOn);
   if (!inspectOn) clearInspect();
+  updateLegendContext();
 });
+
+// ── LEGEND ───────────────────────────────────────────────────────────────
+const $legend        = document.getElementById('legend');
+const $legendToggle  = document.getElementById('legend-toggle');
+const $legendPanel   = document.getElementById('legend-panel');
+const $legSecInspect = $legendPanel.querySelector('[data-section="inspect"]');
+const $legSecAnim    = $legendPanel.querySelector('[data-section="anim"]');
+
+function setLegendOpen(open) {
+  $legend.classList.toggle('open', open);
+  $legendPanel.hidden = !open;
+  localStorage.setItem('svged-legend-open', open ? '1' : '0');
+}
+function updateLegendContext() {
+  $legSecInspect.hidden = !inspectOn;
+  $legSecAnim.hidden    = !animState.hasAnim;
+}
+$legendToggle.addEventListener('pointerdown', e => e.stopPropagation());
+$legendToggle.addEventListener('click', e => { e.stopPropagation(); setLegendOpen($legendPanel.hidden); });
+setLegendOpen(true);
+// updateLegendContext() deferred — animState not yet declared; called by initAnimController
 
 // ── FORMAT ───────────────────────────────────────────────────────────────
 document.getElementById('btn-format').addEventListener('click', () => {
@@ -1303,6 +1401,10 @@ document.addEventListener('keydown', e => {
   if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && animState.hasAnim && !e.target.closest('.cm-editor')) {
     e.preventDefault();
     stepAnim(e.key === 'ArrowRight' ? 1/60 : -1/60);
+    return;
+  }
+  if (e.key === 'Escape' && !$legendPanel.hidden && !e.target.closest('.cm-editor')) {
+    setLegendOpen(false);
     return;
   }
   const mod = e.ctrlKey || e.metaKey;
@@ -1619,10 +1721,10 @@ function initAnimController() {
   animState.hasAnim = false;
 
   const svg = getAnimSvg();
-  if (!svg) { $animBar.hidden = true; return; }
+  if (!svg) { $animBar.hidden = true; updateLegendContext(); return; }
 
   const { count, duration, looping } = computeAnimDuration(svg);
-  if (count === 0 || duration <= 0) { $animBar.hidden = true; return; }
+  if (count === 0 || duration <= 0) { $animBar.hidden = true; updateLegendContext(); return; }
 
   animState.hasAnim     = true;
   animState.duration    = duration;
@@ -1638,6 +1740,7 @@ function initAnimController() {
   try { svg.pauseAnimations(); } catch (_) {}
 
   animState.rafId = requestAnimationFrame(tickAnim);
+  updateLegendContext();
 }
 
 // Controls
