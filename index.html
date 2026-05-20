@@ -1189,11 +1189,14 @@ setLegendOpen(true);
 document.getElementById('btn-format').addEventListener('click', () => {
   const text = editorView.state.doc.toString();
   try {
-    const pretty = xmlFormat(text, {
+    const BLANK = '<!--:SVGED-BLANK:-->';
+    const withSentinels = text.replace(/^[ \t]*$/gm, BLANK);
+    const formatted = xmlFormat(withSentinels, {
       indentation:    ' '.repeat(indentSize),
       collapseContent: true,
       lineSeparator:  '\n',
     });
+    const pretty = formatted.replace(/^[ \t]*<!--:SVGED-BLANK:-->[ \t]*$/gm, '');
     editorView.dispatch({
       changes: { from: 0, to: editorView.state.doc.length, insert: pretty },
     });
