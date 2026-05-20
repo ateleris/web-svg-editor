@@ -545,6 +545,9 @@
             <div class="legend-section" data-section="nav">
               <div class="legend-title">Navigation</div>
               <div class="legend-row" data-overridden-by-inspect><span><kbd>Wheel</kbd></span><span>Zoom</span></div>
+              <div class="legend-row"><span><kbd>Ctrl</kbd>+<kbd>Space</kbd></span><span>Attribute autocomplete</span></div>
+              <div class="legend-row"><span><kbd>↑</kbd> / <kbd>↓</kbd></span><span>Navigate suggestions</span></div>
+              <div class="legend-row"><span><kbd>Enter</kbd> / <kbd>Tab</kbd></span><span>Accept suggestion</span></div>
               <div class="legend-row"><span><kbd>Drag</kbd></span><span>Pan</span></div>
               <div class="legend-row"><span><kbd>Ctrl</kbd>+<kbd>↑</kbd></span><span>Fit to window</span></div>
               <div class="legend-row"><span><kbd>Ctrl</kbd>+<kbd>↓</kbd></span><span>Actual size (1:1)</span></div>
@@ -635,10 +638,11 @@
     "@codemirror/state":          "https://esm.sh/@codemirror/state@6",
     "@codemirror/view":           "https://esm.sh/@codemirror/view@6?external=@codemirror/state",
     "@codemirror/language":       "https://esm.sh/@codemirror/language@6?external=@codemirror/state,@codemirror/view",
-    "@codemirror/basic-setup":    "https://esm.sh/@codemirror/basic-setup?external=@codemirror/state,@codemirror/view,@codemirror/language",
+    "@codemirror/basic-setup":    "https://esm.sh/@codemirror/basic-setup?external=@codemirror/state,@codemirror/view,@codemirror/language,@codemirror/autocomplete",
     "@codemirror/commands":       "https://esm.sh/@codemirror/commands@6?external=@codemirror/state,@codemirror/view,@codemirror/language",
     "@codemirror/lang-xml":       "https://esm.sh/@codemirror/lang-xml@6?external=@codemirror/state,@codemirror/view,@codemirror/language",
-    "@codemirror/theme-one-dark": "https://esm.sh/@codemirror/theme-one-dark@6?external=@codemirror/state,@codemirror/view"
+    "@codemirror/theme-one-dark":  "https://esm.sh/@codemirror/theme-one-dark@6?external=@codemirror/state,@codemirror/view",
+    "@codemirror/autocomplete":    "https://esm.sh/@codemirror/autocomplete@6?external=@codemirror/state,@codemirror/view,@codemirror/language"
   }
 }
 </script>
@@ -692,8 +696,9 @@ import { EditorView, keymap, Decoration }              from '@codemirror/view';
 import { indentWithTab }                               from '@codemirror/commands';
 import { indentUnit, syntaxTree }                      from '@codemirror/language';
 import { EditorState, Compartment, StateField, StateEffect } from '@codemirror/state';
-import { xml }                      from '@codemirror/lang-xml';
+import { xml, xmlLanguage }         from '@codemirror/lang-xml';
 import { oneDark }                  from '@codemirror/theme-one-dark';
+import { acceptCompletion, startCompletion } from '@codemirror/autocomplete';
 import DOMPurify                    from 'https://esm.sh/dompurify@3';
 import xmlFormat                    from 'https://esm.sh/xml-formatter@3';
 import { Muxer, ArrayBufferTarget } from 'https://esm.sh/mp4-muxer@5';
@@ -756,11 +761,253 @@ const inspectHLField = StateField.define({
   provide: f => EditorView.decorations.from(f),
 });
 
+// ── SVG AUTOCOMPLETE ─────────────────────────────────────────────────────
+const SVG_ATTRS = {
+  '*': ['id','class','style','transform','fill','fill-opacity','fill-rule',
+        'stroke','stroke-width','stroke-opacity','stroke-linecap','stroke-linejoin',
+        'stroke-dasharray','stroke-dashoffset','stroke-miterlimit','opacity',
+        'visibility','display','clip-path','clip-rule','mask','filter','color',
+        'cursor','pointer-events','vector-effect'],
+  circle:      ['cx','cy','r','pathLength'],
+  ellipse:     ['cx','cy','rx','ry','pathLength'],
+  rect:        ['x','y','width','height','rx','ry','pathLength'],
+  line:        ['x1','y1','x2','y2','pathLength'],
+  polyline:    ['points','pathLength'],
+  polygon:     ['points','pathLength'],
+  path:        ['d','pathLength'],
+  text:        ['x','y','dx','dy','rotate','textLength','lengthAdjust',
+                'font-family','font-size','font-weight','font-style','text-anchor','dominant-baseline'],
+  tspan:       ['x','y','dx','dy','rotate','textLength','lengthAdjust'],
+  svg:         ['width','height','viewBox','preserveAspectRatio','xmlns','version','x','y'],
+  use:         ['href','x','y','width','height'],
+  defs:        [],
+  g:           [],
+  a:           ['href','target'],
+  image:       ['href','x','y','width','height','preserveAspectRatio'],
+  symbol:      ['viewBox','preserveAspectRatio','x','y','width','height','refX','refY'],
+  marker:      ['markerUnits','markerWidth','markerHeight','refX','refY','orient','viewBox','preserveAspectRatio'],
+  linearGradient:  ['gradientUnits','gradientTransform','x1','y1','x2','y2','spreadMethod','href'],
+  radialGradient:  ['gradientUnits','gradientTransform','cx','cy','r','fx','fy','fr','spreadMethod','href'],
+  stop:        ['offset','stop-color','stop-opacity'],
+  pattern:     ['x','y','width','height','patternUnits','patternContentUnits','patternTransform','href','viewBox','preserveAspectRatio'],
+  clipPath:    ['clipPathUnits'],
+  mask:        ['x','y','width','height','maskUnits','maskContentUnits'],
+  filter:      ['x','y','width','height','filterUnits','primitiveUnits','color-interpolation-filters'],
+  animate:     ['attributeName','from','to','by','dur','begin','end','repeatCount','repeatDur',
+                'fill','restart','values','keyTimes','keySplines','calcMode','additive','accumulate'],
+  animateTransform: ['attributeName','type','from','to','by','dur','begin','end','repeatCount',
+                     'repeatDur','fill','restart','values','keyTimes','keySplines','calcMode','additive','accumulate'],
+  animateMotion:   ['path','dur','begin','end','repeatCount','repeatDur','fill','restart',
+                    'values','keyTimes','keySplines','calcMode','rotate','origin'],
+  set:         ['attributeName','to','dur','begin','end','repeatCount','repeatDur','fill','restart'],
+  feGaussianBlur:  ['in','stdDeviation','edgeMode','result','x','y','width','height'],
+  feOffset:        ['in','dx','dy','result','x','y','width','height'],
+  feColorMatrix:   ['in','type','values','result','x','y','width','height'],
+  feBlend:         ['in','in2','mode','result','x','y','width','height'],
+  feComposite:     ['in','in2','operator','k1','k2','k3','k4','result','x','y','width','height'],
+  feFlood:         ['flood-color','flood-opacity','result','x','y','width','height'],
+  feMerge:         ['result','x','y','width','height'],
+  feMergeNode:     ['in'],
+  feTurbulence:    ['baseFrequency','numOctaves','seed','stitchTiles','type','result','x','y','width','height'],
+  feDisplacementMap: ['in','in2','scale','xChannelSelector','yChannelSelector','result','x','y','width','height'],
+  feMorphology:    ['in','operator','radius','result','x','y','width','height'],
+  feImage:         ['href','preserveAspectRatio','result','x','y','width','height'],
+  feTile:          ['in','result','x','y','width','height'],
+  feComponentTransfer: ['in','result','x','y','width','height'],
+  feFuncR: ['type','tableValues','slope','intercept','amplitude','exponent','offset'],
+  feFuncG: ['type','tableValues','slope','intercept','amplitude','exponent','offset'],
+  feFuncB: ['type','tableValues','slope','intercept','amplitude','exponent','offset'],
+  feFuncA: ['type','tableValues','slope','intercept','amplitude','exponent','offset'],
+  feDiffuseLighting:  ['in','surfaceScale','diffuseConstant','result','x','y','width','height'],
+  feSpecularLighting: ['in','surfaceScale','specularConstant','specularExponent','result','x','y','width','height'],
+  fePointLight:    ['x','y','z'],
+  feSpotLight:     ['x','y','z','pointsAtX','pointsAtY','pointsAtZ','specularExponent','limitingConeAngle'],
+  feDistantLight:  ['azimuth','elevation'],
+  foreignObject:   ['x','y','width','height'],
+  textPath:        ['href','startOffset','method','spacing','textLength','lengthAdjust'],
+  title: [], desc: [], metadata: [],
+};
+
+const _COLORS = ['none','currentColor','transparent','black','white','red','green','blue',
+  'yellow','orange','purple','pink','gray','grey','cyan','magenta','lime','brown',
+  'navy','teal','maroon','olive','silver','aqua','fuchsia','coral','indigo','violet',
+  'gold','turquoise','chocolate','crimson','salmon','khaki','orchid','peru','plum',
+  'sienna','tan','tomato','wheat'];
+
+const SVG_ATTR_VALUES = {
+  fill:               _COLORS,
+  stroke:             _COLORS,
+  color:              _COLORS,
+  'stop-color':       _COLORS,
+  'flood-color':      _COLORS,
+  'lighting-color':   _COLORS,
+  'stroke-linecap':   ['butt','round','square'],
+  'stroke-linejoin':  ['miter','round','bevel','miter-clip','arcs'],
+  'fill-rule':        ['nonzero','evenodd'],
+  'clip-rule':        ['nonzero','evenodd'],
+  visibility:         ['visible','hidden','collapse'],
+  display:            ['inline','block','none'],
+  'vector-effect':    ['none','non-scaling-stroke','non-scaling-size','non-rotation','fixed-position'],
+  'text-anchor':      ['start','middle','end'],
+  'dominant-baseline':['auto','text-bottom','alphabetic','ideographic','middle','central',
+                       'mathematical','hanging','text-top'],
+  'font-weight':      ['normal','bold','bolder','lighter','100','200','300','400','500','600','700','800','900'],
+  'font-style':       ['normal','italic','oblique'],
+  lengthAdjust:       ['spacing','spacingAndGlyphs'],
+  gradientUnits:      ['userSpaceOnUse','objectBoundingBox'],
+  patternUnits:       ['userSpaceOnUse','objectBoundingBox'],
+  patternContentUnits:['userSpaceOnUse','objectBoundingBox'],
+  filterUnits:        ['userSpaceOnUse','objectBoundingBox'],
+  primitiveUnits:     ['userSpaceOnUse','objectBoundingBox'],
+  maskUnits:          ['userSpaceOnUse','objectBoundingBox'],
+  maskContentUnits:   ['userSpaceOnUse','objectBoundingBox'],
+  clipPathUnits:      ['userSpaceOnUse','objectBoundingBox'],
+  markerUnits:        ['strokeWidth','userSpaceOnUse'],
+  spreadMethod:       ['pad','reflect','repeat'],
+  preserveAspectRatio:['none','xMidYMid meet','xMidYMid slice','xMinYMin meet','xMinYMin slice',
+                       'xMaxYMin meet','xMaxYMin slice','xMinYMid meet','xMaxYMid meet',
+                       'xMinYMax meet','xMidYMax meet','xMaxYMax meet'],
+  calcMode:           ['discrete','linear','paced','spline'],
+  restart:            ['always','whenNotActive','never'],
+  additive:           ['replace','sum'],
+  accumulate:         ['none','sum'],
+  repeatCount:        ['indefinite'],
+  'color-interpolation-filters': ['auto','sRGB','linearRGB'],
+  stitchTiles:        ['noStitch','stitch'],
+  edgeMode:           ['duplicate','wrap','none'],
+  mode:               ['normal','multiply','screen','darken','lighten','overlay','color-dodge',
+                       'color-burn','hard-light','soft-light','difference','exclusion',
+                       'hue','saturation','color','luminosity'],
+  operator:           ['over','in','out','atop','xor','lighter','arithmetic','erode','dilate'],
+  xChannelSelector:   ['R','G','B','A'],
+  yChannelSelector:   ['R','G','B','A'],
+  'pointer-events':   ['none','all','stroke','fill','painted','visible','visiblePainted',
+                       'visibleFill','visibleStroke','bounding-box'],
+  cursor:             ['auto','default','none','pointer','crosshair','move','text','wait','help',
+                       'zoom-in','zoom-out','grab','grabbing'],
+};
+
+// Per-element overrides for attributes that mean different things in different contexts
+const SVG_ATTR_VALUES_OVERRIDE = {
+  animate:         { fill: ['freeze','remove'], type: ['translate','scale','rotate','skewX','skewY'] },
+  animateTransform:{ fill: ['freeze','remove'], type: ['translate','scale','rotate','skewX','skewY'] },
+  animateMotion:   { fill: ['freeze','remove'] },
+  set:             { fill: ['freeze','remove'] },
+  feColorMatrix:   { type: ['matrix','saturate','hueRotate','luminanceToAlpha'] },
+  feMorphology:    { operator: ['erode','dilate'] },
+  feTurbulence:    { type: ['fractalNoise','turbulence'] },
+  feFuncR: { type: ['identity','table','discrete','linear','gamma'] },
+  feFuncG: { type: ['identity','table','discrete','linear','gamma'] },
+  feFuncB: { type: ['identity','table','discrete','linear','gamma'] },
+  feFuncA: { type: ['identity','table','discrete','linear','gamma'] },
+};
+
+function svgCompletionSource(context) {
+  const { state, pos, explicit } = context;
+  const tree = syntaxTree(state);
+  let node = tree.resolveInner(pos, -1);
+
+  let inAttrValue = false;
+  let openTagNode = null, attrValueNode = null, attrParentNode = null;
+
+  for (let n = node; n; n = n.parent) {
+    if (n.name === 'AttributeValue' && !inAttrValue) {
+      inAttrValue = true; attrValueNode = n; attrParentNode = n.parent;
+    }
+    if (n.name === 'AttributeName' && !attrParentNode) attrParentNode = n.parent;
+    if (n.name === 'OpenTag') { openTagNode = n; break; }
+    if (n.name === 'Element' || n.name === 'SelfClosingElement' || n.name === 'Document') break;
+  }
+
+  // Element name context: cursor right after '<' (alone) or '<partial'
+  // matchBefore(/<[\w-]*/) matches '<' + optional word chars ending at cursor,
+  // but won't match when cursor is after a space (attribute area) or inside '</'.
+  const elemWord = !inAttrValue && context.matchBefore(/<[\w-]*/);
+  if (elemWord) {
+    const from = elemWord.from + 1; // position after the '<'
+    const elements = Object.keys(SVG_ATTRS).filter(k => k !== '*');
+    return {
+      from,
+      options: elements.map(el => ({
+        label: el, type: 'type',
+        apply(view, _c, cfrom, cto) {
+          view.dispatch({
+            changes: { from: cfrom, to: cto, insert: el + ' ' },
+            selection: { anchor: cfrom + el.length + 1 },
+          });
+          setTimeout(() => startCompletion(view), 0);
+        },
+      })),
+      validFor: /^[\w-]*$/,
+    };
+  }
+
+  if (!openTagNode) return null;
+
+  const tagNameNode = openTagNode.getChild('TagName');
+  if (!tagNameNode) return null;
+  const tagName = state.sliceDoc(tagNameNode.from, tagNameNode.to);
+
+  if (inAttrValue) {
+    const nameNode = attrParentNode && attrParentNode.getChild('AttributeName');
+    if (!nameNode) return null;
+    const attrName = state.sliceDoc(nameNode.from, nameNode.to);
+    const override = SVG_ATTR_VALUES_OVERRIDE[tagName];
+    const values = (override && attrName in override) ? override[attrName] : SVG_ATTR_VALUES[attrName];
+    if (!values || values.length === 0) return null;
+    const from = attrValueNode.from + 1;
+    return {
+      from,
+      options: values.map(v => ({
+        label: v, type: 'keyword',
+        apply(view) {
+          const to = attrValueNode.to - 1;
+          view.dispatch({ changes: { from, to, insert: v }, selection: { anchor: from + v.length } });
+        },
+      })),
+      validFor: /^[^"'\s]*/,
+    };
+  }
+
+  // Attribute-name context
+  const word = context.matchBefore(/[\w-]*/);
+  const wordFrom = word ? word.from : pos;
+
+  const elementAttrs = SVG_ATTRS[tagName] || [];
+  const universalAttrs = SVG_ATTRS['*'];
+  const seen = new Set(elementAttrs);
+  const allAttrs = [...elementAttrs, ...universalAttrs.filter(a => !seen.has(a))];
+  if (allAttrs.length === 0 && !explicit) return null;
+
+  return {
+    from: wordFrom,
+    options: allAttrs.map(name => ({
+      label: name, type: 'property',
+      apply(view, _c, cfrom, cto) {
+        const insert = `${name}=""`;
+        view.dispatch({
+          changes: { from: cfrom, to: cto, insert },
+          selection: { anchor: cfrom + name.length + 2 },
+        });
+        const overrideVals = SVG_ATTR_VALUES_OVERRIDE[tagName];
+        if ((overrideVals && name in overrideVals) || SVG_ATTR_VALUES[name]) {
+          setTimeout(() => startCompletion(view), 0);
+        }
+      },
+    })),
+    validFor: /^[\w-]*$/,
+  };
+}
+
 // ── EDITOR ──────────────────────────────────────────────────────────────
 function buildExtensions(dark) {
   return [
     basicSetup,
-    keymap.of([indentWithTab]),
+    xmlLanguage.data.of({ autocomplete: svgCompletionSource }),
+    keymap.of([
+      { key: 'Tab', run: acceptCompletion },
+      indentWithTab,
+    ]),
     indentComp.of([indentUnit.of(' '.repeat(indentSize)), EditorState.tabSize.of(indentSize)]),
     xml(),
     themeComp.of(dark ? oneDark : []),
