@@ -510,8 +510,8 @@
     <span class="sep"></span>
     <button class="btn" id="btn-zoom-in"    title="Zoom in (Ctrl ++)">＋</button>
     <button class="btn" id="btn-zoom-out"   title="Zoom out (Ctrl –)">－</button>
-    <button class="btn" id="btn-fit"        title="Fit to window (Ctrl 0)">Fit</button>
-    <button class="btn" id="btn-one-to-one" title="Actual size (100%)">1:1</button>
+    <button class="btn" id="btn-fit"        title="Fit to window (Ctrl+↑)">Fit</button>
+    <button class="btn" id="btn-one-to-one" title="Actual size 1:1 (Ctrl+↓)">1:1</button>
     <span class="sep"></span>
     <button class="btn" id="btn-viewbox">ViewBox</button>
     <button class="btn" id="btn-inspect" title="Inspect elements — hover preview to find code">Inspect</button>
@@ -544,8 +544,9 @@
               <div class="legend-title">Navigation</div>
               <div class="legend-row"><span><kbd>Wheel</kbd></span><span>Zoom</span></div>
               <div class="legend-row"><span><kbd>Drag</kbd></span><span>Pan</span></div>
-              <div class="legend-row"><span><kbd>Ctrl</kbd>+<kbd>0</kbd></span><span>Fit to window</span></div>
-              <div class="legend-row"><span><kbd>Ctrl</kbd>+<kbd>=</kbd> / <kbd>−</kbd></span><span>Zoom in / out</span></div>
+              <div class="legend-row"><span><kbd>Ctrl</kbd>+<kbd>↑</kbd></span><span>Fit to window</span></div>
+              <div class="legend-row"><span><kbd>Ctrl</kbd>+<kbd>↓</kbd></span><span>Actual size (1:1)</span></div>
+              <div class="legend-row"><span><kbd>Ctrl</kbd>+<kbd>+</kbd> / <kbd>−</kbd></span><span>Zoom in / out</span></div>
             </div>
             <div class="legend-section" data-section="inspect" hidden>
               <div class="legend-title">Inspect mode</div>
@@ -1401,6 +1402,12 @@ document.addEventListener('keydown', e => {
     setAnimPlaying(!animState.playing);
     return;
   }
+  if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && (e.ctrlKey || e.metaKey) && !e.target.closest('.cm-editor')) {
+    e.preventDefault();
+    if (e.key === 'ArrowUp') fitToWindow();
+    else { scale = 1; tx = 0; ty = 0; applyTransform(); }
+    return;
+  }
   if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && animState.hasAnim && !e.target.closest('.cm-editor')) {
     e.preventDefault();
     stepAnim(e.key === 'ArrowRight' ? 1/60 : -1/60);
@@ -1415,7 +1422,6 @@ document.addEventListener('keydown', e => {
   if (e.key === 's' && !e.shiftKey) { e.preventDefault(); saveFile(); }
   if (e.key === 'S' &&  e.shiftKey) { e.preventDefault(); saveAs();   }
   if (e.key === 'o')                { e.preventDefault(); openFile(); }
-  if (e.key === '0')                { e.preventDefault(); fitToWindow(); }
   if (e.key === '=' || e.key === '+') {
     e.preventDefault();
     const cx = $viewport.clientWidth/2, cy = $viewport.clientHeight/2;
