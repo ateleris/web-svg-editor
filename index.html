@@ -150,7 +150,7 @@
 
     /* ── Editor pane ──────────────────────────────────────────────── */
     #editor-pane {
-      overflow: visible;
+      overflow: hidden;
       position: relative;
       min-width: 160px;
       background: var(--surface);
@@ -159,7 +159,11 @@
 
     /* CodeMirror fill */
     .cm-editor          { height: 100% !important; }
-    .cm-scroller        { overflow: auto !important; font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace !important; }
+    .cm-scroller        { overflow: auto !important; font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace !important; scrollbar-color: var(--btn-bg) var(--surface); scrollbar-width: thin; }
+    .cm-scroller::-webkit-scrollbar             { width: 8px; height: 8px; }
+    .cm-scroller::-webkit-scrollbar-track       { background: var(--surface); }
+    .cm-scroller::-webkit-scrollbar-thumb       { background: var(--btn-bg); border-radius: 4px; }
+    .cm-scroller::-webkit-scrollbar-thumb:hover { background: var(--btn-hover); }
 
     /* ── Gutter ───────────────────────────────────────────────────── */
     #gutter {
@@ -1971,6 +1975,16 @@ $editorLegendToggle.addEventListener('click', e => { e.stopPropagation(); setEdi
 setEditorLegendOpen(localStorage.getItem('svged-editor-legend-open') === '1');
 // updateLegendContext() deferred — animState not yet declared; called by initAnimController
 
+// Keep the ? button clear of the CodeMirror vertical scrollbar
+{
+  const scroller = editorView.scrollDOM;
+  const updateLegendRight = () => {
+    const sbWidth = scroller.offsetWidth - scroller.clientWidth;
+    $editorLegend.style.right = (10 + sbWidth) + 'px';
+  };
+  new ResizeObserver(updateLegendRight).observe(scroller);
+}
+
 // ── FORMAT ───────────────────────────────────────────────────────────────
 document.getElementById('btn-format').addEventListener('click', () => {
   const text = editorView.state.doc.toString();
@@ -2080,7 +2094,9 @@ function detectIndent(text) {
     const tabs = line.match(/^\t+/);
     if (tabs) return 4;                       // file uses tabs → treat as 4
     const spaces = line.match(/^ +/);
-    if (spaces) depths.push(spaces[0].length);
+    // Only count lines that start a new XML token; attribute-continuation
+    // lines (e.g. "     width=…" aligned after "<svg ") skew the GCD.
+    if (spaces && /^\s*</.test(line)) depths.push(spaces[0].length);
   }
   if (!depths.length) return null;
   let g = depths[0];
