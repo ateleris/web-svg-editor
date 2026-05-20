@@ -212,19 +212,22 @@
     }
     #stage svg { display: block; }
 
-    /* ViewBox overlay — lives inside #stage, moves with it */
-    .vb-overlay {
+    /* ViewBox overlay — viewport-fixed, zoom-independent */
+    #viewbox-frame {
       position: absolute;
-      top: 0; left: 0;
       pointer-events: none;
       border: 2px dashed var(--overlay);
+      opacity: 0;
+      transition: opacity 80ms;
+      z-index: 10;
     }
+    #viewbox-frame.visible { opacity: 1; }
     .vb-label {
       position: absolute;
       top: 3px; left: 3px;
       padding: 1px 6px;
       font-family: monospace;
-      font-size: 11px;
+      font-size: 16px;
       background: var(--overlay);
       color: var(--overlay-text);
       border-radius: 3px;
@@ -478,6 +481,7 @@
       <div id="viewport">
         <div id="stage"></div>
         <div id="inspect-frame"></div>
+        <div id="viewbox-frame"><span class="vb-label"></span></div>
         <div id="no-vb-note" hidden>no viewBox set</div>
         <div id="zoom-badge">100%</div>
       </div>
@@ -622,6 +626,8 @@ const $stage      = document.getElementById('stage');
 const $viewport   = document.getElementById('viewport');
 const $errBanner  = document.getElementById('error-banner');
 const $noVbNote   = document.getElementById('no-vb-note');
+const $vbFrame    = document.getElementById('viewbox-frame');
+const $vbLabel    = $vbFrame.querySelector('.vb-label');
 const $zoomBadge  = document.getElementById('zoom-badge');
 const $toast      = document.getElementById('toast');
 const $fileInput  = document.getElementById('file-input');
@@ -1045,37 +1051,27 @@ function fitToWindow() {
 
 // ── VIEWBOX OVERLAY ──────────────────────────────────────────────────────
 function updateViewboxOverlay() {
-  // Remove any existing overlay
-  $stage.querySelectorAll('.vb-overlay').forEach(el => el.remove());
   $noVbNote.hidden = true;
-
-  if (!viewboxOn) return;
+  if (!viewboxOn) { $vbFrame.classList.remove('visible'); return; }
 
   const svg = $stage.querySelector('svg');
-  if (!svg) return;
+  if (!svg) { $vbFrame.classList.remove('visible'); return; }
 
   const vb = svg.getAttribute('viewBox');
   if (!vb) {
+    $vbFrame.classList.remove('visible');
     $noVbNote.hidden = false;
     return;
   }
 
-  // Measure SVG size in stage-local units (compensate for current scale)
-  const r    = svg.getBoundingClientRect();
-  const svgW = r.width  / scale;
-  const svgH = r.height / scale;
-
-  const el  = document.createElement('div');
-  el.className = 'vb-overlay';
-  el.style.width  = svgW + 'px';
-  el.style.height = svgH + 'px';
-
-  const lbl = document.createElement('span');
-  lbl.className   = 'vb-label';
-  lbl.textContent = `viewBox="${vb}"`;
-  el.appendChild(lbl);
-
-  $stage.appendChild(el);
+  const vr = $viewport.getBoundingClientRect();
+  const sr = svg.getBoundingClientRect();
+  $vbFrame.style.left   = (sr.left - vr.left) + 'px';
+  $vbFrame.style.top    = (sr.top  - vr.top)  + 'px';
+  $vbFrame.style.width  = sr.width  + 'px';
+  $vbFrame.style.height = sr.height + 'px';
+  $vbLabel.textContent  = `viewBox="${vb}"`;
+  $vbFrame.classList.add('visible');
 }
 
 $btnViewbox.addEventListener('click', () => {
