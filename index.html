@@ -1388,8 +1388,8 @@ function svgCompletionSource(context) {
       inAttrValue = true; attrValueNode = n; attrParentNode = n.parent;
     }
     if (n.name === 'AttributeName' && !attrParentNode) attrParentNode = n.parent;
-    if (n.name === 'OpenTag') { openTagNode = n; break; }
-    if (n.name === 'Element' || n.name === 'SelfClosingElement' || n.name === 'Document') break;
+    if (n.name === 'OpenTag' || n.name === 'SelfClosingTag') { openTagNode = n; break; }
+    if (n.name === 'Element' || n.name === 'Document') break;
   }
 
   // Element name context: cursor right after '<' (alone) or '<partial'
