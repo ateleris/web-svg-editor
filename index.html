@@ -746,7 +746,8 @@ import { indentUnit, syntaxTree }                      from '@codemirror/languag
 import { EditorState, Compartment, StateField, StateEffect } from '@codemirror/state';
 import { xml, xmlLanguage }         from '@codemirror/lang-xml';
 import { oneDark }                  from '@codemirror/theme-one-dark';
-import { acceptCompletion, startCompletion } from '@codemirror/autocomplete';
+import { acceptCompletion, startCompletion, snippetCompletion,
+         nextSnippetField, prevSnippetField, clearSnippet } from '@codemirror/autocomplete';
 import DOMPurify                    from 'https://esm.sh/dompurify@3';
 import xmlFormat                    from 'https://esm.sh/xml-formatter@3';
 import { Muxer, ArrayBufferTarget } from 'https://esm.sh/mp4-muxer@5';
@@ -1265,6 +1266,106 @@ const SVG_ATTR_VALUE_DESCRIPTIONS = {
   },
 };
 
+const PATH_DATA_ATTRS = {
+  path:          new Set(['d']),
+  animateMotion: new Set(['path']),
+};
+
+function isPathDataContext(tagName, attrName) {
+  const set = PATH_DATA_ATTRS[tagName];
+  return !!(set && set.has(attrName));
+}
+
+const PATH_COMMANDS = [
+  { label: 'M', snippet: 'M #{x} #{y}',
+    info: 'M x y — Move pen to absolute (x, y) without drawing. Starts a new sub-path.' },
+  { label: 'm', snippet: 'm #{dx} #{dy}',
+    info: 'm dx dy — Move pen by relative (dx, dy) without drawing. Starts a new sub-path.' },
+  { label: 'L', snippet: 'L #{x} #{y}',
+    info: 'L x y — Draw a straight line to absolute (x, y).' },
+  { label: 'l', snippet: 'l #{dx} #{dy}',
+    info: 'l dx dy — Draw a straight line by relative (dx, dy).' },
+  { label: 'H', snippet: 'H #{x}',
+    info: 'H x — Draw a horizontal line to absolute x (y unchanged).' },
+  { label: 'h', snippet: 'h #{dx}',
+    info: 'h dx — Draw a horizontal line by relative dx.' },
+  { label: 'V', snippet: 'V #{y}',
+    info: 'V y — Draw a vertical line to absolute y (x unchanged).' },
+  { label: 'v', snippet: 'v #{dy}',
+    info: 'v dy — Draw a vertical line by relative dy.' },
+  { label: 'C', snippet: 'C #{x1} #{y1} #{x2} #{y2} #{x} #{y}',
+    info: 'C x1 y1 x2 y2 x y — Cubic Bezier to (x, y) with control points (x1, y1) and (x2, y2).' },
+  { label: 'c', snippet: 'c #{dx1} #{dy1} #{dx2} #{dy2} #{dx} #{dy}',
+    info: 'c dx1 dy1 dx2 dy2 dx dy — Cubic Bezier (relative).' },
+  { label: 'S', snippet: 'S #{x2} #{y2} #{x} #{y}',
+    info: "S x2 y2 x y — Smooth cubic Bezier; first control point reflects the previous curve's second control point." },
+  { label: 's', snippet: 's #{dx2} #{dy2} #{dx} #{dy}',
+    info: 's dx2 dy2 dx dy — Smooth cubic Bezier (relative).' },
+  { label: 'Q', snippet: 'Q #{x1} #{y1} #{x} #{y}',
+    info: 'Q x1 y1 x y — Quadratic Bezier to (x, y) with control point (x1, y1).' },
+  { label: 'q', snippet: 'q #{dx1} #{dy1} #{dx} #{dy}',
+    info: 'q dx1 dy1 dx dy — Quadratic Bezier (relative).' },
+  { label: 'T', snippet: 'T #{x} #{y}',
+    info: "T x y — Smooth quadratic Bezier; control point reflects the previous quadratic's control point." },
+  { label: 't', snippet: 't #{dx} #{dy}',
+    info: 't dx dy — Smooth quadratic Bezier (relative).' },
+  { label: 'A', snippet: 'A #{rx} #{ry} #{x-axis-rotation} #{large-arc-flag} #{sweep-flag} #{x} #{y}',
+    info: 'A rx ry x-axis-rotation large-arc-flag(0/1) sweep-flag(0/1) x y — Elliptical arc to (x, y) with radii (rx, ry).' },
+  { label: 'a', snippet: 'a #{rx} #{ry} #{x-axis-rotation} #{large-arc-flag} #{sweep-flag} #{dx} #{dy}',
+    info: 'a rx ry x-axis-rotation large-arc-flag(0/1) sweep-flag(0/1) dx dy — Elliptical arc (relative).' },
+  { label: 'Z', snippet: 'Z',
+    info: 'Z — Close the current sub-path with a straight line back to its start.' },
+  { label: 'z', snippet: 'z',
+    info: 'z — Close the current sub-path (same as Z).' },
+];
+
+const PATH_COMMAND_COMPLETIONS = PATH_COMMANDS.map(c =>
+  snippetCompletion(c.snippet, { label: c.label, info: c.info, type: 'function' })
+);
+
+const TRANSFORM_ATTRS = new Set(['transform', 'gradientTransform', 'patternTransform']);
+
+function isTransformContext(attrName) {
+  return TRANSFORM_ATTRS.has(attrName);
+}
+
+const TRANSFORM_COMPLETIONS = [
+  snippetCompletion('translate(#{tx} #{ty})', {
+    label: 'translate', type: 'function',
+    info: 'translate(tx ty) — Shift by (tx, ty). ty defaults to 0 if omitted.',
+  }),
+  snippetCompletion('scale(#{sx} #{sy})', {
+    label: 'scale', type: 'function',
+    info: 'scale(sx sy) — Scale by (sx, sy). sy defaults to sx (uniform) if omitted.',
+  }),
+  snippetCompletion('rotate(#{angle} #{cx} #{cy})', {
+    label: 'rotate', type: 'function',
+    info: 'rotate(angle cx cy) — Rotate by angle degrees around (cx, cy). Omit cx/cy to rotate around the origin.',
+  }),
+  snippetCompletion('skewX(#{angle})', {
+    label: 'skewX', type: 'function',
+    info: 'skewX(angle) — Skew along the X axis by angle degrees.',
+  }),
+  snippetCompletion('skewY(#{angle})', {
+    label: 'skewY', type: 'function',
+    info: 'skewY(angle) — Skew along the Y axis by angle degrees.',
+  }),
+  snippetCompletion('matrix(#{a} #{b} #{c} #{d} #{e} #{f})', {
+    label: 'matrix', type: 'function',
+    info: 'matrix(a b c d e f) — Full 2D transform matrix. Columns: x-axis (a,b), y-axis (c,d), translation (e,f).',
+  }),
+];
+
+const VIEWBOX_COMPLETION = snippetCompletion('#{min-x} #{min-y} #{width} #{height}', {
+  label: 'viewBox values', type: 'function',
+  info: 'min-x min-y width height — Internal coordinate system: origin at (min-x, min-y), size width×height.',
+});
+
+const KEYSPLINES_COMPLETION = snippetCompletion('#{x1} #{y1} #{x2} #{y2}', {
+  label: 'spline segment', type: 'function',
+  info: 'x1 y1 x2 y2 — Cubic Bezier easing for one animation interval (all values 0–1). Add one set per gap between keyTimes values, separated by semicolons.',
+});
+
 function attrDescription(tagName, attrName) {
   const override = SVG_ATTR_DESCRIPTIONS_OVERRIDE[tagName];
   if (override && attrName in override) return override[attrName];
@@ -1322,6 +1423,43 @@ function svgCompletionSource(context) {
     const nameNode = attrParentNode && attrParentNode.getChild('AttributeName');
     if (!nameNode) return null;
     const attrName = state.sliceDoc(nameNode.from, nameNode.to);
+
+    if (isTransformContext(attrName)) {
+      const word = context.matchBefore(/[a-zA-Z]*/);
+      const from = word ? word.from : pos;
+      return {
+        from,
+        options: TRANSFORM_COMPLETIONS,
+        validFor: /^[a-zA-Z]*$/,
+      };
+    }
+
+    if (attrName === 'viewBox') {
+      return {
+        from: attrValueNode.from + 1,
+        options: [VIEWBOX_COMPLETION],
+        validFor: /^[^"]*/,
+      };
+    }
+
+    if (attrName === 'keySplines') {
+      return {
+        from: pos,
+        options: [KEYSPLINES_COMPLETION],
+        validFor: /^[^"]*/,
+      };
+    }
+
+    if (isPathDataContext(tagName, attrName)) {
+      const word = context.matchBefore(/[A-Za-z]*/);
+      const from = word ? word.from : pos;
+      return {
+        from,
+        options: PATH_COMMAND_COMPLETIONS,
+        validFor: /^[A-Za-z]*$/,
+      };
+    }
+
     const override = SVG_ATTR_VALUES_OVERRIDE[tagName];
     const values = (override && attrName in override) ? override[attrName] : SVG_ATTR_VALUES[attrName];
     if (!values || values.length === 0) return null;
@@ -1362,7 +1500,9 @@ function svgCompletionSource(context) {
           selection: { anchor: cfrom + name.length + 2 },
         });
         const overrideVals = SVG_ATTR_VALUES_OVERRIDE[tagName];
-        if ((overrideVals && name in overrideVals) || SVG_ATTR_VALUES[name]) {
+        if ((overrideVals && name in overrideVals) || SVG_ATTR_VALUES[name] ||
+            isPathDataContext(tagName, name) || isTransformContext(name) ||
+            name === 'viewBox' || name === 'keySplines') {
           setTimeout(() => startCompletion(view), 0);
         }
       },
@@ -1378,6 +1518,9 @@ function buildExtensions(dark) {
     xmlLanguage.data.of({ autocomplete: svgCompletionSource }),
     keymap.of([
       { key: 'Tab', run: acceptCompletion },
+      { key: 'Tab', run: nextSnippetField },
+      { key: 'Shift-Tab', run: prevSnippetField },
+      { key: 'Escape', run: clearSnippet },
       indentWithTab,
     ]),
     indentComp.of([indentUnit.of(' '.repeat(indentSize)), EditorState.tabSize.of(indentSize)]),
