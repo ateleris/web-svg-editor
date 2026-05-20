@@ -318,6 +318,8 @@
     }
     .legend-row { display: flex; justify-content: space-between; gap: 12px; line-height: 1.8; margin-bottom: 4px; }
     .legend-row:last-child { margin-bottom: 0; }
+    .legend-row.overridden { opacity: 0.4; }
+    .legend-row.overridden span:last-child { text-decoration: line-through; }
     .legend-row kbd {
       display: inline-block; padding: 1px 6px;
       background: var(--btn-bg);
@@ -542,7 +544,7 @@
           <div id="legend-panel" hidden>
             <div class="legend-section" data-section="nav">
               <div class="legend-title">Navigation</div>
-              <div class="legend-row"><span><kbd>Wheel</kbd></span><span>Zoom</span></div>
+              <div class="legend-row" data-overridden-by-inspect><span><kbd>Wheel</kbd></span><span>Zoom</span></div>
               <div class="legend-row"><span><kbd>Drag</kbd></span><span>Pan</span></div>
               <div class="legend-row"><span><kbd>Ctrl</kbd>+<kbd>↑</kbd></span><span>Fit to window</span></div>
               <div class="legend-row"><span><kbd>Ctrl</kbd>+<kbd>↓</kbd></span><span>Actual size (1:1)</span></div>
@@ -1180,6 +1182,9 @@ function setLegendOpen(open) {
 function updateLegendContext() {
   $legSecInspect.hidden = !inspectOn;
   $legSecAnim.hidden    = !animState.hasAnim;
+  $legendPanel.querySelectorAll('[data-overridden-by-inspect]').forEach(row => {
+    row.classList.toggle('overridden', inspectOn);
+  });
 }
 $legendToggle.addEventListener('pointerdown', e => e.stopPropagation());
 $legendToggle.addEventListener('click', e => { e.stopPropagation(); setLegendOpen($legendPanel.hidden); });
