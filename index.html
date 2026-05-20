@@ -416,6 +416,26 @@
     #mp4-progress { display: flex; flex-direction: column; gap: 10px; padding-top: 4px; }
     #mp4-progress progress { width: 100%; height: 8px; border-radius: 4px; border: none; }
     #mp4-progress-label { font-size: 12px; color: var(--text-muted); }
+
+    /* ── Inspect mode ────────────────────────────────────────────────── */
+    #inspect-frame {
+      position: absolute;
+      pointer-events: none;
+      border: 2px dashed var(--overlay);
+      background: rgba(80, 160, 255, 0.08);
+      border-radius: 2px;
+      opacity: 0;
+      transition: opacity 80ms;
+      z-index: 10;
+    }
+    #inspect-frame.visible { opacity: 1; }
+    body.inspect-mode #viewport { cursor: crosshair; }
+    body.inspect-mode #stage svg * { pointer-events: all; }
+    .cm-inspect-hl {
+      background: rgba(255, 170, 80, 0.22);
+      outline: 1px solid rgba(255, 170, 80, 0.6);
+      border-radius: 2px;
+    }
   </style>
 </head>
 <body>
@@ -438,6 +458,7 @@
     <button class="btn" id="btn-one-to-one" title="Actual size (100%)">1:1</button>
     <span class="sep"></span>
     <button class="btn" id="btn-viewbox">ViewBox</button>
+    <button class="btn" id="btn-inspect" title="Inspect elements — hover preview to find code">Inspect</button>
     <span class="sep"></span>
     <label class="indent-label">Indent
       <select id="indent-select">
@@ -456,6 +477,7 @@
     <div id="preview-pane">
       <div id="viewport">
         <div id="stage"></div>
+        <div id="inspect-frame"></div>
         <div id="no-vb-note" hidden>no viewBox set</div>
         <div id="zoom-badge">100%</div>
       </div>
@@ -583,10 +605,10 @@ const CONFIG = {
 
 // ── IMPORTS ─────────────────────────────────────────────────────────────
 import { basicSetup }               from '@codemirror/basic-setup';
-import { EditorView, keymap }        from '@codemirror/view';
-import { indentWithTab }            from '@codemirror/commands';
-import { indentUnit }              from '@codemirror/language';
-import { EditorState, Compartment } from '@codemirror/state';
+import { EditorView, keymap, Decoration }              from '@codemirror/view';
+import { indentWithTab }                               from '@codemirror/commands';
+import { indentUnit, syntaxTree }                      from '@codemirror/language';
+import { EditorState, Compartment, StateField, StateEffect } from '@codemirror/state';
 import { xml }                      from '@codemirror/lang-xml';
 import { oneDark }                  from '@codemirror/theme-one-dark';
 import DOMPurify                    from 'https://esm.sh/dompurify@3';
@@ -604,8 +626,10 @@ const $zoomBadge  = document.getElementById('zoom-badge');
 const $toast      = document.getElementById('toast');
 const $fileInput  = document.getElementById('file-input');
 const $filename   = document.getElementById('filename-label');
-const $btnTheme   = document.getElementById('btn-theme');
-const $btnViewbox = document.getElementById('btn-viewbox');
+const $btnTheme     = document.getElementById('btn-theme');
+const $btnViewbox   = document.getElementById('btn-viewbox');
+const $btnInspect   = document.getElementById('btn-inspect');
+const $inspectFrame = document.getElementById('inspect-frame');
 
 // ── STATE ────────────────────────────────────────────────────────────────
 const themeComp  = new Compartment();
@@ -618,10 +642,34 @@ let pendingFit  = false;
 let indentSize  = 4;
 let isDark      = true;
 let viewboxOn   = false;
+let inspectOn      = false;
+let inspectStack   = [];
+let inspectIdx     = 0;
+let inspectCurrentEl = null;
+let inspectRafId     = 0;
+let elementToRange = new WeakMap();
+let rangeArray     = [];
 // zoom / pan
 let scale = 1, tx = 0, ty = 0;
 let isPanning = false;
 let panStart  = { x: 0, y: 0, tx: 0, ty: 0 };
+
+// ── INSPECTOR DECORATION ─────────────────────────────────────────────────
+const setInspectHL = StateEffect.define();
+const inspectHLField = StateField.define({
+  create() { return Decoration.none; },
+  update(deco, tr) {
+    for (const e of tr.effects) {
+      if (e.is(setInspectHL)) {
+        if (e.value == null) return Decoration.none;
+        const { from, to } = e.value;
+        return Decoration.set([Decoration.mark({ class: 'cm-inspect-hl' }).range(from, to)]);
+      }
+    }
+    return deco.map(tr.changes);
+  },
+  provide: f => EditorView.decorations.from(f),
+});
 
 // ── EDITOR ──────────────────────────────────────────────────────────────
 function buildExtensions(dark) {
@@ -631,7 +679,11 @@ function buildExtensions(dark) {
     indentComp.of([indentUnit.of(' '.repeat(indentSize)), EditorState.tabSize.of(indentSize)]),
     xml(),
     themeComp.of(dark ? oneDark : []),
-    EditorView.updateListener.of(u => { if (u.docChanged) scheduleRender(); }),
+    inspectHLField,
+    EditorView.updateListener.of(u => {
+      if (u.docChanged) scheduleRender();
+      if (inspectOn && u.selectionSet && !u.docChanged) highlightFromCursor();
+    }),
   ];
 }
 
@@ -732,6 +784,7 @@ function renderPreview() {
 
   // 3. Inject into stage
   $stage.innerHTML = clean;
+  buildElementMap();
   updateViewboxOverlay();
   initAnimController();
   if (pendingFit) { pendingFit = false; fitToWindow(); }
@@ -744,6 +797,163 @@ function showError(msg) {
 function clearError() {
   $errBanner.hidden = true;
 }
+
+// ── INSPECT ──────────────────────────────────────────────────────────────
+function buildElementMap() {
+  elementToRange = new WeakMap();
+  rangeArray = [];
+
+  const svgRoot = $stage.querySelector('svg');
+  if (!svgRoot) return;
+
+  const state = editorView.state;
+  const sourceElems = [];
+
+  syntaxTree(state).iterate({
+    enter(nodeRef) {
+      if (nodeRef.name !== 'Element') return;
+      const node = nodeRef.node;
+      const open = node.getChild('OpenTag') ?? node.getChild('SelfClosingTag');
+      if (!open) return;
+      const tn = open.getChild('TagName');
+      if (!tn) return;
+      sourceElems.push({
+        openFrom: open.from,
+        openTo:   open.to,
+        elemTo:   node.to,
+        tagName:  state.doc.sliceString(tn.from, tn.to).toLowerCase(),
+      });
+    },
+  });
+
+  const domElems = [];
+  const walker = document.createTreeWalker(svgRoot, NodeFilter.SHOW_ELEMENT);
+  let n;
+  while ((n = walker.nextNode())) domElems.push(n);
+
+  // Zip source elements with DOM elements in document order.
+  // When tag names mismatch, advance source past elements dropped by sanitization.
+  let si = 0;
+  for (const domEl of domElems) {
+    const domTag = domEl.tagName.toLowerCase();
+    while (si < sourceElems.length && sourceElems[si].tagName !== domTag) si++;
+    if (si >= sourceElems.length) break;
+    const { openFrom, openTo, elemTo } = sourceElems[si++];
+    elementToRange.set(domEl, { from: openFrom, to: openTo });
+    rangeArray.push({ from: openFrom, to: openTo, elemTo, el: domEl });
+  }
+}
+
+function positionInspectFrame(el) {
+  const vr = $viewport.getBoundingClientRect();
+  const er = el.getBoundingClientRect();
+  $inspectFrame.style.left   = (er.left   - vr.left) + 'px';
+  $inspectFrame.style.top    = (er.top    - vr.top)  + 'px';
+  $inspectFrame.style.width  = er.width  + 'px';
+  $inspectFrame.style.height = er.height + 'px';
+}
+
+function tickInspectFrame() {
+  inspectRafId = 0;
+  if (!inspectCurrentEl || !inspectCurrentEl.isConnected) {
+    $inspectFrame.classList.remove('visible');
+    inspectCurrentEl = null;
+    return;
+  }
+  positionInspectFrame(inspectCurrentEl);
+  inspectRafId = requestAnimationFrame(tickInspectFrame);
+}
+
+function showInspectFrame(el) {
+  inspectCurrentEl = el;
+  positionInspectFrame(el);
+  $inspectFrame.classList.add('visible');
+  if (!inspectRafId) inspectRafId = requestAnimationFrame(tickInspectFrame);
+}
+
+function clearInspect() {
+  $inspectFrame.classList.remove('visible');
+  if (editorView) editorView.dispatch({ effects: setInspectHL.of(null) });
+  inspectStack = [];
+  inspectIdx   = 0;
+  inspectCurrentEl = null;
+  if (inspectRafId) { cancelAnimationFrame(inspectRafId); inspectRafId = 0; }
+}
+
+function highlightAtEditorPos(pos) {
+  if (!rangeArray.length) return;
+  let found = -1;
+  for (let i = 0; i < rangeArray.length; i++) {
+    if (rangeArray[i].from > pos) break;
+    if (rangeArray[i].elemTo >= pos) found = i;
+  }
+  if (found === -1) { clearInspect(); return; }
+  const { from, to, el } = rangeArray[found];
+  editorView.dispatch({ effects: setInspectHL.of({ from, to }) });
+  showInspectFrame(el);
+}
+
+function highlightFromCursor() {
+  highlightAtEditorPos(editorView.state.selection.main.head);
+}
+
+function applyInspectStack() {
+  const el = inspectStack[inspectIdx];
+  if (!el) return;
+  const range = elementToRange.get(el);
+  if (!range) return;
+  showInspectFrame(el);
+  editorView.dispatch({
+    effects: [
+      setInspectHL.of(range),
+      EditorView.scrollIntoView(range.from, { y: 'nearest' }),
+    ],
+  });
+}
+
+// Preview → code: hover & click on rendered SVG elements
+$stage.addEventListener('pointermove', e => {
+  if (!inspectOn) return;
+  inspectStack = document.elementsFromPoint(e.clientX, e.clientY)
+    .filter(el => elementToRange.has(el) && el.tagName.toLowerCase() !== 'svg');
+  inspectIdx = 0;
+  if (!inspectStack.length) { clearInspect(); return; }
+  applyInspectStack();
+});
+
+$stage.addEventListener('pointerleave', () => {
+  if (!inspectOn) return;
+  clearInspect();
+});
+
+$stage.addEventListener('pointerdown', e => {
+  if (!inspectOn || e.button !== 0) return;
+  e.stopPropagation(); // block pan handler on $viewport
+  const el = inspectStack[inspectIdx];
+  if (!el) return;
+  const range = elementToRange.get(el);
+  if (!range) return;
+  editorView.dispatch({
+    selection: { anchor: range.from + 1 },
+    effects: [
+      setInspectHL.of(range),
+      EditorView.scrollIntoView(range.from, { y: 'center' }),
+    ],
+  });
+  editorView.focus();
+});
+
+// Editor hover → preview outline (mirrors preview-side hover)
+editorView.dom.addEventListener('mousemove', e => {
+  if (!inspectOn) return;
+  const pos = editorView.posAtCoords({ x: e.clientX, y: e.clientY });
+  if (pos == null) { clearInspect(); return; }
+  highlightAtEditorPos(pos);
+});
+editorView.dom.addEventListener('mouseleave', () => {
+  if (!inspectOn) return;
+  clearInspect();
+});
 
 // ── ZOOM & PAN ───────────────────────────────────────────────────────────
 function applyTransform() {
@@ -761,9 +971,16 @@ function zoomAt(factor, cx, cy) {
   applyTransform();
 }
 
-// Wheel zoom centred on cursor
+// Wheel zoom centred on cursor (or layer-cycle in inspect mode)
 $viewport.addEventListener('wheel', e => {
   e.preventDefault();
+  if (inspectOn) {
+    if (!inspectStack.length) return;
+    const dir = e.deltaY > 0 ? 1 : -1;
+    inspectIdx = (inspectIdx + dir + inspectStack.length) % inspectStack.length;
+    applyInspectStack();
+    return;
+  }
   const r = $viewport.getBoundingClientRect();
   zoomAt(e.deltaY < 0 ? 1 + CONFIG.zoomStep : 1 / (1 + CONFIG.zoomStep),
          e.clientX - r.left, e.clientY - r.top);
@@ -865,6 +1082,13 @@ $btnViewbox.addEventListener('click', () => {
   viewboxOn = !viewboxOn;
   $btnViewbox.classList.toggle('active', viewboxOn);
   updateViewboxOverlay();
+});
+
+$btnInspect.addEventListener('click', () => {
+  inspectOn = !inspectOn;
+  $btnInspect.classList.toggle('active', inspectOn);
+  document.body.classList.toggle('inspect-mode', inspectOn);
+  if (!inspectOn) clearInspect();
 });
 
 // ── FORMAT ───────────────────────────────────────────────────────────────
