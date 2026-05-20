@@ -1300,6 +1300,11 @@ document.addEventListener('keydown', e => {
     setAnimPlaying(!animState.playing);
     return;
   }
+  if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && animState.hasAnim && !e.target.closest('.cm-editor')) {
+    e.preventDefault();
+    stepAnim(e.key === 'ArrowRight' ? 1/60 : -1/60);
+    return;
+  }
   const mod = e.ctrlKey || e.metaKey;
   if (!mod) return;
   if (e.key === 's' && !e.shiftKey) { e.preventDefault(); saveFile(); }
@@ -1589,6 +1594,23 @@ function seekAnim(frac) {
       : Math.min(animState.virtualTime, animState.duration);
     try { svg.setCurrentTime(t); } catch (_) {}
   }
+  updateAnimUI();
+}
+
+function stepAnim(deltaSec) {
+  if (!animState.hasAnim) return;
+  if (animState.playing) setAnimPlaying(false);
+  const d = animState.duration;
+  let t = animState.virtualTime + deltaSec;
+  if (animState.looping) {
+    t = ((t % d) + d) % d;
+  } else {
+    t = Math.max(0, Math.min(d, t));
+  }
+  animState.virtualTime = t;
+  animState.lastRaf     = 0;
+  const svg = getAnimSvg();
+  if (svg) { try { svg.setCurrentTime(t); } catch (_) {} }
   updateAnimUI();
 }
 
