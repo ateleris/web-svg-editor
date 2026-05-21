@@ -4,6 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SVG Editor</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#11111b">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-512.png">
   <style>
     /* ── Theme variables ──────────────────────────────────────────── */
     [data-theme="dark"] {
@@ -3191,6 +3195,19 @@ $pngForm.addEventListener('submit',  e  => { e.preventDefault(); exportPng(); })
 
 // ── INIT ─────────────────────────────────────────────────────────────────
 scheduleRender();
+
+// ── PWA ───────────────────────────────────────────────────────────────────
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+if ('launchQueue' in window) {
+  window.launchQueue.setConsumer(async ({ files }) => {
+    if (!files?.length) return;
+    const file = await files[0].getFile();
+    const text = await file.text();
+    loadContent(text, file.name, files[0]);
+  });
+}
 </script>
 </body>
 </html>

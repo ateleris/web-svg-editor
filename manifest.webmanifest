@@ -1,0 +1,33 @@
+{
+  "name": "SVG Editor",
+  "short_name": "SVG Editor",
+  "description": "Edit and preview SVG files in the browser",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone"],
+  "background_color": "#1e1e2e",
+  "theme_color": "#11111b",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "file_handlers": [
+    {
+      "action": "/",
+      "accept": {
+        "image/svg+xml": [".svg"]
+      }
+    }
+  ]
+}
