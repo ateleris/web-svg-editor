@@ -626,6 +626,10 @@
         <button id="editor-legend-toggle" class="btn" title="Show editor shortcuts">?</button>
         <div id="editor-legend-panel" hidden>
           <div class="legend-section">
+            <div class="legend-title">Editor</div>
+            <div class="legend-row"><span><kbd>Ctrl</kbd>+<kbd>Wheel</kbd></span><span>Font size</span></div>
+          </div>
+          <div class="legend-section">
             <div class="legend-title">Autocomplete</div>
             <div class="legend-row"><span><kbd>Ctrl</kbd>+<kbd>Space</kbd></span><span>Trigger manually</span></div>
             <div class="legend-row"><span><kbd>↑</kbd> / <kbd>↓</kbd></span><span>Navigate suggestions</span></div>
@@ -788,6 +792,9 @@ const CONFIG = {
   minZoom:      0.02,
   maxZoom:      64,
   defaultIndent: 4,
+  editorFontDefault: 13,
+  editorFontMin:      8,
+  editorFontMax:     32,
   defaultTheme: 'dark',
   defaultSvg:
 `<svg xmlns="http://www.w3.org/2000/svg"
@@ -854,6 +861,7 @@ const $btnTheme     = document.getElementById('btn-theme');
 const $btnViewbox   = document.getElementById('btn-viewbox');
 const $btnInspect   = document.getElementById('btn-inspect');
 const $inspectFrame = document.getElementById('inspect-frame');
+const $editorPane   = document.getElementById('editor-pane');
 
 // ── STATE ────────────────────────────────────────────────────────────────
 const themeComp  = new Compartment();
@@ -873,6 +881,8 @@ let inspectCurrentEl = null;
 let inspectRafId     = 0;
 let elementToRange = new WeakMap();
 let rangeArray     = [];
+// editor font size
+let editorFontSize = 13;
 // zoom / pan
 let scale = 1, tx = 0, ty = 0;
 let isPanning = false;
@@ -1842,6 +1852,22 @@ $indentSelect.addEventListener('change', () => {
   ])});
   localStorage.setItem('svged-indent', String(indentSize));
 });
+
+// ── EDITOR FONT SIZE ─────────────────────────────────────────────────────
+function setEditorFontSize(size) {
+  editorFontSize = Math.max(CONFIG.editorFontMin, Math.min(CONFIG.editorFontMax, size));
+  editorView.dom.style.fontSize = editorFontSize + 'px';
+  localStorage.setItem('svged-editor-font', String(editorFontSize));
+}
+{
+  const saved = parseFloat(localStorage.getItem('svged-editor-font') || '');
+  setEditorFontSize(isNaN(saved) ? CONFIG.editorFontDefault : saved);
+}
+$editorPane.addEventListener('wheel', e => {
+  if (!e.ctrlKey && !e.metaKey) return;
+  e.preventDefault();
+  setEditorFontSize(editorFontSize + (e.deltaY < 0 ? 1 : -1));
+}, { passive: false });
 
 // ── RENDER PIPELINE ──────────────────────────────────────────────────────
 function scheduleRender() {
