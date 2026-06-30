@@ -1895,10 +1895,11 @@ function renderPreview() {
   // 2. Sanitize (strip scripts, event handlers, data: URIs in src)
   const clean = DOMPurify.sanitize(text, {
     USE_PROFILES:  { svg: true, svgFilters: true },
-    ADD_TAGS:      ['animate', 'animateMotion', 'animateColor', 'set', 'mpath'],
+    ADD_TAGS:      ['animate', 'animateMotion', 'animateColor', 'set', 'mpath', 'use'],
     ADD_ATTR:      ['from', 'to', 'by', 'begin', 'end', 'values', 'calcMode',
                     'keyTimes', 'keySplines', 'keyPoints', 'additive', 'accumulate',
-                    'repeatDur', 'restart', 'attributeType', 'path', 'rotate'],
+                    'repeatDur', 'restart', 'attributeType', 'path', 'rotate',
+                    'href', 'xlink:href'],
     FORBID_TAGS:   ['script'],
     FORBID_ATTR:   ['onload', 'onerror', 'onmouseover'],
   });
