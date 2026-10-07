@@ -1,5 +1,5 @@
 // Bump SHELL_V whenever index.html or app-shell assets change to force a cache refresh.
-const SHELL_V   = 'app-shell-v1';
+const SHELL_V   = 'app-shell-v2';
 const RUNTIME_V = 'runtime-v1';
 const SHELL_URLS = ['/', '/index.html', '/manifest.webmanifest', '/icon.svg', '/icon-512.png'];
 

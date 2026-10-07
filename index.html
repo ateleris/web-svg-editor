@@ -1906,10 +1906,23 @@ function renderPreview() {
 
   // 3. Inject into stage
   $stage.innerHTML = clean;
+  sizeFromViewBox($stage.querySelector('svg'));
   buildElementMap();
   updateViewboxOverlay();
   initAnimController();
   if (pendingFit) { pendingFit = false; fitToWindow(); }
+}
+
+// Without an absolute width and height, an SVG inside the shrink-to-fit #stage collapses to 0x0.
+function sizeFromViewBox(svg) {
+  if (!svg) return;
+  const isAbsolute = v => !!v && !v.trim().endsWith('%');
+  if (isAbsolute(svg.getAttribute('width')) || isAbsolute(svg.getAttribute('height'))) return;
+
+  const vb = (svg.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+  if (vb.length !== 4 || !(vb[2] > 0) || !(vb[3] > 0)) return;
+  svg.setAttribute('width',  vb[2]);
+  svg.setAttribute('height', vb[3]);
 }
 
 function showError(msg) {
